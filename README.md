@@ -69,18 +69,4 @@ The frontend will be available at: http://localhost:5173 in your browser
 - **Frontend Application**: http://localhost:5173
 - **Backend API**: http://localhost:8000
 
-## Usage
-
-```
-
-### Full Docker Stack (when frontend Docker is fixed)
-```bash
-# Start all services
-docker-compose up
-
-# Or run in background
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-```
+## Note that docker compose up will have to be running in one window, or docker compose up -d, and then npm run dev will have to be running as well. If you use the -d flag then you can run npm run dev in the same terminal window.
