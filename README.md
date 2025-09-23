@@ -1,4 +1,4 @@
-# 🤖 Multi-Agent LLM Customer Service Stack
+# Multi-Agent LLM Customer Service Stack
 
 ### Backend (please edit as needed)
 - **Python** with FastAPI
