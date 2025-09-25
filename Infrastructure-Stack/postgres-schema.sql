@@ -67,15 +67,32 @@ CREATE TABLE order_items (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create queries table for customer support/AI interactions
+-- Create conversations table for tracking multi-turn conversations
+CREATE TABLE conversations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id VARCHAR(255) UNIQUE NOT NULL, -- Unique session identifier for the conversation
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL, -- May be null initially until user is identified
+    user_email VARCHAR(255), -- Store email for lookup even if user_id is null initially
+    status VARCHAR(50) DEFAULT 'active', -- active, completed, abandoned
+    conversation_type VARCHAR(50) DEFAULT 'general', -- general, change_information, order_inquiry, etc.
+    context JSONB, -- Store conversation context and state
+    correlation_id UUID NOT NULL DEFAULT uuid_generate_v4(), -- Unique per conversation journey
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create queries table for customer support/AI interactions (updated to link to conversations)
 CREATE TABLE queries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, -- Link to conversation
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL, -- May be null initially
     query_text TEXT NOT NULL,
-    status VARCHAR(50) DEFAULT 'pending',
+    agent_type VARCHAR(50) NOT NULL, -- message, order, email, policy, orchestrator
     agent_response TEXT,
+    status VARCHAR(50) DEFAULT 'pending',
     correlation_id UUID NOT NULL DEFAULT uuid_generate_v4(), -- Unique per query journey
     related_order_id UUID REFERENCES orders(id), -- Link queries to specific orders
+    message_order INTEGER NOT NULL, -- Order of messages in conversation
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -111,10 +128,19 @@ CREATE INDEX idx_orders_created_at ON orders(created_at);
 CREATE INDEX idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX idx_order_items_product_id ON order_items(product_id);
 CREATE INDEX idx_order_items_correlation_id ON order_items(correlation_id);
+CREATE INDEX idx_conversations_session_id ON conversations(session_id);
+CREATE INDEX idx_conversations_user_id ON conversations(user_id);
+CREATE INDEX idx_conversations_user_email ON conversations(user_email);
+CREATE INDEX idx_conversations_status ON conversations(status);
+CREATE INDEX idx_conversations_correlation_id ON conversations(correlation_id);
+CREATE INDEX idx_conversations_created_at ON conversations(created_at);
+CREATE INDEX idx_queries_conversation_id ON queries(conversation_id);
 CREATE INDEX idx_queries_user_id ON queries(user_id);
+CREATE INDEX idx_queries_agent_type ON queries(agent_type);
 CREATE INDEX idx_queries_status ON queries(status);
 CREATE INDEX idx_queries_correlation_id ON queries(correlation_id);
 CREATE INDEX idx_queries_related_order_id ON queries(related_order_id);
+CREATE INDEX idx_queries_message_order ON queries(message_order);
 CREATE INDEX idx_queries_created_at ON queries(created_at);
 CREATE INDEX idx_email_notifications_correlation_id ON email_notifications(correlation_id);
 CREATE INDEX idx_email_notifications_status ON email_notifications(status);
@@ -158,6 +184,9 @@ CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_conversations_updated_at BEFORE UPDATE ON conversations 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_queries_updated_at BEFORE UPDATE ON queries 

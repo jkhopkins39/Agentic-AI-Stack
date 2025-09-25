@@ -12,7 +12,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_LOG_DIRS: /var/lib/kafka/data
@@ -64,7 +64,7 @@ services:
     container_name: AgenticAIStackDB
     environment:
       POSTGRES_USER: AgenticAIStackDB
-      POSTGRES_PASSWORD: 8%w=r?D52Eo2EwcVW:
+      POSTGRES_PASSWORD: "8%w=r?D52Eo2EwcVW:"
       POSTGRES_DB: AgenticAIStackDB
     ports:
       - "5432:5432"
@@ -72,7 +72,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Mount custom postgresql.conf for logical replication
       - ./postgresql.conf:/etc/postgresql/postgresql.conf
-    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+      # Mount custom pg_hba.conf for authentication
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/etc/postgresql/pg_hba.conf
 
 volumes:
   kafka-data:
