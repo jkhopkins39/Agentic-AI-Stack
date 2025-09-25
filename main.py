@@ -108,7 +108,6 @@ def load_policy_text():
         return [Document(page_content=content, metadata={"source": policy_path})]
     return []
 
-
 def generate_data_store():
     documents = load_documents() # Load documents from a source
     policy_docs = load_policy_text() # Load policy text
@@ -127,9 +126,6 @@ Answer the question based only on the following context:
  - -
 Answer the question based on the above context: {question}
 """
-
-#query_text = "who translated this version of the odyssey, and when was it first published online? Additionally, what do the numbers in square brackets throughout the text mean?"
-
 
 def query_rag(query_text):
     """
@@ -304,7 +300,8 @@ def router(state: State):
         return {"next": "message"}
     return {"next": "message"}
 
-#The order agent is responsible for various functions, specifically retrieval of order data upon request
+# The order agent will be used for retrieval of order data upon request
+
 def order_agent(state: State):
     last_message = state["messages"][-1]
     user_message = last_message.content
@@ -367,6 +364,7 @@ def email_agent(state: State):
     print(f"Email agent response: {reply.content}")
     return {"messages": [{"role": "assistant", "content": f"Email Agent: {reply.content}"}]}
 
+# It checks the state for changes made and sends an email notification
 def handle_information_change_notification(state: State):
     """Handle sending email notifications for information changes"""
     changes_made = state.get("changes_made", [])
@@ -377,10 +375,12 @@ def handle_information_change_notification(state: State):
     # Send the information change email
     email_sent = send_information_change_email(changes_made)
     
+    
     if email_sent:
+        # Notify the user the email was sent to the session email
         response = f"I've sent you a security notification email about the changes made to your account. Please check your email at {SESSION_EMAIL}."
     else:
-        # Even if email fails, acknowledge the change
+        # If the email fails, notify the user of changes made
         changes_text = ", ".join(changes_made)
         response = f"Your {changes_text} has been updated successfully. I attempted to send you a security notification email, but there was an issue with the email service."
     
@@ -389,8 +389,11 @@ def handle_information_change_notification(state: State):
         "needs_email_notification": False  # Reset the flag
     }
 
+"""Handle order receipt requests with context memory and multi-turn conversation.
+User either provides it all at once or we ask follow-up questions. This function uses
+an LLM to parse the request and extract relevant variables. It is called conditionally
+to reduce number of API calls and latency"""
 def handle_order_receipt_request(state: State):
-    """Handle order receipt requests with context memory and multi-turn conversation"""
     last_message = state["messages"][-1]
     user_message = last_message.content
     conversation_context = state.get("conversation_context", {})
@@ -404,16 +407,16 @@ def handle_order_receipt_request(state: State):
             "content": """You are an expert at parsing order receipt requests. 
             Extract the following information from the user's message:
             - user_email: The email address they provide to identify their orders
-            - order_number: Specific order number mentioned (e.g., ORD-2024-001, ORDER-123)
+            - order_number: Specific order number mentioned (ex: ORD-2024-001, ORDER-123)
             - chronological_request: Words like 'last', 'most recent', 'latest', 'previous', 'first'
             - product_name: Product name mentioned to find orders containing that product
             - time_reference: Time references like 'yesterday', 'last week', 'this month'
             
-            Examples:
-            "I need a receipt for order ORD-2024-001" → order_number: "ORD-2024-001"
-            "Can you send me my last order receipt?" → chronological_request: "last"
-            "I want the receipt for my laptop order" → product_name: "laptop"
-            "Send receipt for my order from last week" → time_reference: "last week"
+            Example:
+            "I need a receipt for order ORD-2024-001" -> order_number: "ORD-2024-001"
+            "Can you send me my last order receipt?" -> chronological_request: "last"
+            "I want the receipt for my laptop order" -> product_name: "laptop"
+            "Send receipt for my order from last week" -> time_reference: "last week"
             """
         },
         {"role": "user", "content": user_message}
@@ -425,16 +428,14 @@ def handle_order_receipt_request(state: State):
     return process_receipt_request(parsing_result.model_dump(), SESSION_EMAIL, conversation_context, state)
 
 def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
-    """Process the actual receipt request and send email"""
-    
     order_data = None
     
-    # Try different lookup methods based on parsed request
     if parsed_request.get("order_number") and parsed_request["order_number"] not in ['<UNKNOWN>', None, '']:
-        # Look up by specific order number
+        # Look up by order number
         order_data = lookup_order_by_number(parsed_request["order_number"])
         if not order_data:
             response = f"I couldn't find an order with number '{parsed_request['order_number']}'. Please check the order number and try again."
+        # If the order number exists but email doesn't match, notify user
         elif order_data["email"].lower() != user_email.lower():
             response = f"The order '{parsed_request['order_number']}' doesn't belong to the email address {user_email}. Please verify your information."
             order_data = None
@@ -468,13 +469,13 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
         email_sent = send_order_receipt_email(order_data)
         
         if email_sent:
-            response = f"Perfect! I've sent the receipt for order {order_data['order_number']} to jeremyyhop@gmail.com. The order total was ${order_data['total_amount']:.2f} and includes {len(order_data['items'])} item(s)."
+            response = f"I've sent the receipt for order {order_data['order_number']} to jeremyyhop@gmail.com."
         else:
-            # Even if email fails, show the receipt
+            # Show the receipt upon email failure
             receipt_content = format_order_receipt(order_data)
             response = f"Here's your order receipt:\n\n{receipt_content}\n\nNote: I had trouble sending the email, but here's your receipt information above."
     
-    # Clean up conversation context
+    # Clean up conversation contex
     updated_context = conversation_context.copy()
     updated_context["user_email"] = SESSION_EMAIL
     
@@ -536,11 +537,11 @@ def message_agent(state: State):
     last_message = state["messages"][-1]
     message_type = state.get("message_type", "Message")
     
-    # Handle Change Information requests specially
+    # Handle Change Information requests 
     if message_type == "Change Information":
         return handle_change_information(state)
     
-    # Handle Order Receipt requests specially
+    # Handle Order Receipt requests
     elif message_type == "Order Receipt":
         return handle_order_receipt(state)
     
@@ -560,9 +561,10 @@ def message_agent(state: State):
     print(f"Message agent response: {reply.content}")
     return {"messages": [{"role": "assistant", "content": f"Message Agent: {reply.content}"}]}
 
+#Get database connection using environment variables. At present, database connection is used for change user info and receipt emails
 def get_database_connection():
-    """Get database connection using environment variables"""
     try:
+        # Establish connection to our PostgreSQL database (contains user info and orders)
         conn = psycopg2.connect(
             host=os.getenv('DB_HOST', 'localhost'),
             port=os.getenv('DB_PORT', '5432'),
@@ -576,30 +578,36 @@ def get_database_connection():
         print(f"Database connection error: {e}")
         return None
 
+#Look up user by email address
 def lookup_user_by_email(email: str):
-    """Look up user information by email address"""
     conn = get_database_connection()
     if not conn:
         return None
     
     try:
+        # Create a cursor which is a control structure that enables traversal over records in database
         with conn.cursor() as cursor:
+            # Define a query to retrieve user information by email
             query = """
             SELECT id, email, first_name, last_name, phone, created_at, updated_at
             FROM users 
             WHERE LOWER(email) = LOWER(%s)
             """
+            #Use the cursor to execute the query with the provided email parameter
             cursor.execute(query, (email,))
+
+            # Fetch one result from the executed query
             user = cursor.fetchone()
             return dict(user) if user else None
     except Exception as e:
         print(f"Error looking up user: {e}")
         return None
     finally:
+        # Saves changes and closes connection
         conn.close()
 
+# Update user information in database
 def update_user_information(user_id: str, updates: dict):
-    """Update user information in database"""
     conn = get_database_connection()
     if not conn:
         return False
@@ -610,6 +618,7 @@ def update_user_information(user_id: str, updates: dict):
             update_fields = []
             values = []
             
+            # fields are provided in updates dictionary parameter
             for field, value in updates.items():
                 if value is not None:
                     update_fields.append(f"{field} = %s")
@@ -638,13 +647,14 @@ def update_user_information(user_id: str, updates: dict):
     finally:
         conn.close()
 
+# Look up an order by order number
 def lookup_order_by_number(order_number: str):
-    """Look up order information by order number"""
     conn = get_database_connection()
     if not conn:
         return None
     
     try:
+        # Use cursor to execute query
         with conn.cursor() as cursor:
             query = """
             SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
@@ -674,8 +684,8 @@ def lookup_order_by_number(order_number: str):
     finally:
         conn.close()
 
+# Look up orders by user email, ordered by most recent first
 def lookup_orders_by_email(email: str, limit: int = 10):
-    """Look up orders by user email, ordered by most recent first"""
     conn = get_database_connection()
     if not conn:
         return []
@@ -712,8 +722,8 @@ def lookup_orders_by_email(email: str, limit: int = 10):
     finally:
         conn.close()
 
+# Look up order by product name, optionally filtered by user email
 def lookup_orders_by_product_name(product_name: str, user_email: Optional[str] = None):
-    """Look up orders containing a specific product"""
     conn = get_database_connection()
     if not conn:
         return []
@@ -761,8 +771,8 @@ def lookup_orders_by_product_name(product_name: str, user_email: Optional[str] =
     finally:
         conn.close()
 
+# Send information change notification email using SendGrid SMTP relay. In production recipient email will be session email
 def send_information_change_email(changes_made: list, recipient_email: str = "jeremyyhop@gmail.com"):
-    """Send information change notification email using SendGrid SMTP relay"""
     if not SMTP_AVAILABLE:
         print("SMTP not available. Email would have been sent to:", recipient_email)
         print(f"Information change notification: {', '.join(changes_made)}")
@@ -801,7 +811,7 @@ def send_information_change_email(changes_made: list, recipient_email: str = "je
                 
                 <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
                     <p style="margin: 0; color: #856404;">
-                        <strong>⚠️ Security Notice:</strong> If you did not make this change, please contact us immediately.
+                        <strong>Security Notice:</strong> If you did not make this change, contact us at agenticaistack@gmail.com.
                     </p>
                 </div>
                 
@@ -860,6 +870,7 @@ Please do not reply to this email.
         print(f"Information change notification: {', '.join(changes_made)}")
         return False
 
+# Send order receipt email using SendGrid SMTP relay. In production recipient email will be session email
 def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyhop@gmail.com"):
     """Send order receipt email using SendGrid SMTP relay"""
     if not SMTP_AVAILABLE:
@@ -890,7 +901,6 @@ def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyho
             <h2>Order Receipt</h2>
             <pre style="font-family: Arial, sans-serif; white-space: pre-wrap;">{receipt_content}</pre>
             <br><br>
-            <p>Thank you for your business!</p>
             <p>If you have any questions, please contact our customer support.</p>
         </body>
         </html>
@@ -959,7 +969,7 @@ TOTAL: ${order_data['total_amount']:.2f} {order_data['currency']}
     
     return receipt
 
-# Conversation Management Functions
+# Conversation Management Functions (helpers for managing conversations and queries in the database)
 def create_conversation(session_id: str, user_id: Optional[str] = None, user_email: Optional[str] = None, 
                        conversation_type: str = 'general') -> str:
     """Create a new conversation and return conversation_id"""
@@ -1008,6 +1018,7 @@ def get_conversation(session_id: str) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
+# Update conversation context and optionally user_id and user_email
 def update_conversation_context(conversation_id: str, context: Dict[str, Any], 
                               user_id: Optional[str] = None, user_email: Optional[str] = None) -> bool:
     """Update conversation context and user information"""
@@ -1047,6 +1058,7 @@ def update_conversation_context(conversation_id: str, context: Dict[str, Any],
     finally:
         conn.close()
 
+# Once we have a conversation, we can log each query and response for history
 def save_query_to_conversation(conversation_id: str, user_message: str, agent_type: str, 
                               agent_response: str, message_order: int, user_id: Optional[str] = None) -> str:
     """Save a query and response to the conversation"""
@@ -1073,6 +1085,7 @@ def save_query_to_conversation(conversation_id: str, user_message: str, agent_ty
     finally:
         conn.close()
 
+# This is used for debugging and to show conversation history in the UI
 def get_conversation_history(conversation_id: str) -> List[Dict[str, Any]]:
     """Get conversation history with all queries and responses"""
     conn = get_database_connection()
@@ -1096,6 +1109,7 @@ def get_conversation_history(conversation_id: str) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+# Handle change information requests with multi-turn conversation support
 def handle_change_information(state: State):
     """Handle change information requests with multi-turn conversation support"""
     last_message = state["messages"][-1]
@@ -1172,7 +1186,7 @@ def handle_change_information(state: State):
     
     # If no updates identified
     if not updates:
-        response = "I understand you want to change your information, but I couldn't identify what specific changes you'd like to make. Could you please be more specific about what information you'd like to update?"
+        response = "I understand you want to change your information, but I couldn't identify what specific changes you'd like to make. Could you be more specific about what information you'd like to update?"
         return {
             "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
             "parsed_changes": parsing_result.model_dump(),
@@ -1181,6 +1195,7 @@ def handle_change_information(state: State):
     
     # If we have both updates and user data, proceed with update
     if user_data:
+        # perform update by passing user id and dictionary of updates to be applied
         success = update_user_information(user_data['id'], updates)
         
         if success:
@@ -1218,6 +1233,7 @@ def handle_change_information(state: State):
             "user_data": {}
         }
 
+# Handle order receipt requests
 def handle_order_receipt(state: State):
     """Handle order receipt requests"""
     last_message = state["messages"][-1]
@@ -1228,6 +1244,7 @@ def handle_order_receipt(state: State):
         "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}]
     }
 
+# Orchestrator agent to manage agent responses and trigger followup actions
 def orchestrator_agent(state: State):
     """Enhanced orchestrator that manages agent responses and triggers follow-up actions"""
     last_message = state["messages"][-1]
@@ -1269,7 +1286,6 @@ def orchestrator_agent(state: State):
         return {"messages": [{"role": "assistant", "content": "I'm here to help you. How can I assist you today?"}]}
 
 #Initialize a state graph, then we add nodes, naming them and linking their respective agents.
-#We also add edges from A to B, and conditional edge for router
 graph_builder = StateGraph(State)
 graph_builder.add_node("classifier", classify_message)
 graph_builder.add_node("router", router)
@@ -1278,6 +1294,8 @@ graph_builder.add_node("email", email_agent)
 graph_builder.add_node("policy", policy_agent)
 graph_builder.add_node("message", message_agent)
 graph_builder.add_node("orchestrator", orchestrator_agent)
+
+#We also add edges from start to classifier; once classified, goes to router
 graph_builder.add_edge(START, "classifier")
 graph_builder.add_edge("classifier", "router")
 graph_builder.add_conditional_edges(
@@ -1307,15 +1325,14 @@ graph_builder.add_conditional_edges(
 graph = graph_builder.compile()
 
 def run_chatbot():
-    """Enhanced chatbot with conversation memory"""
-    # Generate a unique session ID for this conversation
+    #Enhanced chatbot with conversation memory. Create session ID and conversation tracking
     session_id = str(uuid.uuid4())
-    print(f"Starting new conversation session: {session_id}")
+    print(f"Starting conversation w/ session ID: {session_id}")
     
-    # Initialize conversation in database (without database, this will fail gracefully)
+    # Initialize conversation in database
     conversation_id = create_conversation(session_id)
     if not conversation_id:
-        print("Warning: Could not create conversation in database, running in memory-only mode")
+        print("Warning: Running in memory-only mode. Agent may not remember past interactions.")
         conversation_id = str(uuid.uuid4())
     
     # Initialize our first state with conversation tracking
@@ -1334,17 +1351,17 @@ def run_chatbot():
         "needs_email_notification": False
     }
     
-    print("🤖 Enhanced Chatbot with Conversation Memory")
+    print("Enhanced chatbot with conversation memory.")
     print("=" * 50)
     print("I can help you with orders, policies, information changes, and general questions.")
-    print("Type 'exit' to end the conversation.")
+    print("Press Ctrl + C to exit.")
     print("-" * 50)
 
     while True:
-        user_input = input("\n👤 You: ").strip()
+        user_input = input("\nUser: ").strip()
         
         if user_input.lower() in ["exit", "quit", "q"]:
-            print("👋 Thanks for chatting! Have a great day!")
+            print("Thanks for chatting! Have a great day!")
             break
             
         if not user_input:
@@ -1370,7 +1387,7 @@ def run_chatbot():
                 last_message = state["messages"][-1]
                 if isinstance(last_message, dict) and "content" in last_message:
                     response_content = last_message["content"]
-                    print(f"🤖 Assistant: {response_content}")
+                    print(f"Assistant: {response_content}")
                     
                     # Save query and response to database (if available)
                     try:
@@ -1392,14 +1409,14 @@ def run_chatbot():
                                 state.get("conversation_context", {}).get("user_email")
                             )
                     except Exception as e:
-                        print(f"Warning: Could not save to database: {e}")
+                        print(f"Could not save to database: {e}")
                         
                 else:
                     print(f"Assistant: {last_message}")
                     
         except Exception as e:
             print(f"Error: {e}")
-            print("I apologize for the error. Please try again or contact support if the issue persists.")
+            print("Please try again or contact support // agenticaistack@gmail.com.")
 
 if __name__ == "__main__":
     run_chatbot()
