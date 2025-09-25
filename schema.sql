@@ -20,7 +20,7 @@ CREATE TABLE user_addresses (
 
 CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_number VARCHAR(50), UNIQUE NOT NULL,
+    order_number VARCHAR(50) UNIQUE NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id),
     status VARCHAR(50) DEFAULT 'pending',
     total_amount DECIMAL(10,2),

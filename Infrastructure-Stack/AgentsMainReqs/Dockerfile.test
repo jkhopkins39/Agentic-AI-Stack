@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install required packages
+COPY Infrastructure-Stack/AgentsMainReqs/requirementsKafLang.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy test harness code
+COPY tests /app/tests
