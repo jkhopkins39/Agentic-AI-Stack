@@ -1,21 +1,24 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    tailwindcss() 
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
   },
   optimizeDeps: {
-    // Force include these specific packages
     include: [
       'class-variance-authority',
       '@radix-ui/react-slot',
       '@radix-ui/react-dialog',
-      '@radix-ui/react-separator', 
+      '@radix-ui/react-separator',
       '@radix-ui/react-tooltip',
       'lucide-react',
       'clsx',

@@ -31,7 +31,7 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
           <SidebarHeader className="border-b p-4">
             <div className="flex items-center gap-2">
               <MessageSquare className="h-6 w-6" />
-              <span>Customer Service</span>
+              <span>Profile Settings</span>
             </div>
           </SidebarHeader>
           
