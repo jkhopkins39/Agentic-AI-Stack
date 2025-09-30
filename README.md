@@ -31,8 +31,15 @@ Create a `.env` file in the root directory:
 POSTGRES_DB=agent_system
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=password123
-ANTHROPIC_API_KEY=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
-OPENAI_API_KEY=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
+# Get your API keys from:
+# OpenAI: https://platform.openai.com/api-keys
+OPENAI_API_KEY=sk-proj-your-actual-openai-key-here
+
+# Anthropic: https://console.anthropic.com/settings/keys  
+ANTHROPIC_API_KEY=sk-ant-your-actual-anthropic-key-here
+
+# SendGrid: https://app.sendgrid.com/settings/api_keys
+SENDGRID_API_KEY=SG.your-sendgrid-api-key-here
 
 ```
 
