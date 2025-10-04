@@ -782,7 +782,11 @@ def send_information_change_email(changes_made: list, recipient_email: str = "je
     smtp_server = "smtp.sendgrid.net"
     smtp_port = 587  # Using TLS port
     smtp_username = "apikey"
-    smtp_password = "SG.czyjEcPBTviXSXL0KUlzjg.lBSnhqgOdzoXSZnQ_SOhQoX2rzF8zoLcr72yuzVQuFk"
+    smtp_password = os.getenv('SENDGRID_API_KEY')
+    
+    if not smtp_password:
+        print("SendGrid API key not found in environment variables")
+        return False
     
     try:
         # Format the changes
@@ -882,7 +886,11 @@ def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyho
     smtp_server = "smtp.sendgrid.net"
     smtp_port = 587  # Using TLS port
     smtp_username = "apikey"
-    smtp_password = "SG.czyjEcPBTviXSXL0KUlzjg.lBSnhqgOdzoXSZnQ_SOhQoX2rzF8zoLcr72yuzVQuFk"
+    smtp_password = os.getenv('SENDGRID_API_KEY')
+    
+    if not smtp_password:
+        print("SendGrid API key not found in environment variables")
+        return False
     
     try:
         # Format the order receipt
