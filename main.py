@@ -4,12 +4,9 @@ import psycopg2 # PostgreSQL database adapter
 from psycopg2.extras import RealDictCursor # For dict-like cursor results
 import uuid # For generating unique session IDs
 import json # For JSON operations
-import re # For regex pattern matching
-from datetime import datetime, timedelta # For date/time operations
 import smtplib # For email service
 from email.mime.text import MIMEText # Additionally used for email service
 from email.mime.multipart import MIMEMultipart # Additionally used for email service
-SMTP_AVAILABLE = True
 from typing import Annotated, Literal, Optional, List, Dict, Any # Different data types we need
 from dotenv import load_dotenv # Importing dotenv to get API key from .env file
 from pydantic import BaseModel, Field # Used for validation and structuring message classification
@@ -21,10 +18,12 @@ from langchain.schema import Document # Importing Document schema from Langchain
 from langchain_core.prompts import ChatPromptTemplate # Importing ChatPromptTemplate for prompt formatting
 from langchain.vectorstores.chroma import Chroma # Importing Chroma vector store from Langchain
 from langchain.chat_models import ChatOpenAI # Import OpenAI LLM
+from langchain.chat_models import init_chat_model # Initialization using whatever chatbot API you're using
 from langgraph.graph import StateGraph, START, END # These are nodes in graph
 from langgraph.graph.message import add_messages # Messages between nodes
-from langchain.chat_models import init_chat_model # Initialization using whatever chatbot API you're using
 from IPython.display import Image, display # This is for displaying the graph visualization
+
+SMTP_AVAILABLE = True
 
 # Data path reads in txt file for policy RAG
 DATA_PATH = os.path.join(os.getcwd())
@@ -201,10 +200,10 @@ llm = init_chat_model("anthropic:claude-3-haiku-20240307")
 
 #Define message classifier and insert our model options as the literal types
 class MessageClassifier(BaseModel):
-    message_type: Literal["Order", "Email", "Policy", "Message", "Order Receipt", "Change Information"] = Field(
+    message_type: Literal["Order", "Email", "Policy", "Message", "Change Information"] = Field(
         ...,
         description="Classify if the user message is related to orders, emails, policy,"+
-        " order receipt requests, changing user information, and if it's none of those: messaging."
+        " changing user information, and if it's none of those: messaging."
     )
 
 # Define user information parser for change information requests
@@ -218,6 +217,13 @@ class UserInformationParser(BaseModel):
     new_lastname: Optional[str] = Field(None, description="The new last name the user wants to change to")
     current_phone: Optional[str] = Field(None, description="The user's current phone number mentioned in the request")
     new_phone: Optional[str] = Field(None, description="The new phone number the user wants to change to")
+
+# Define order sub-type parser to determine if an order request is for receipt, status, etc.
+class OrderSubTypeParser(BaseModel):
+    order_sub_type: Literal["receipt", "status", "tracking", "general"] = Field(
+        ...,
+        description="Classify the specific type of order request: receipt for order receipts, status for order status, tracking for shipping tracking, general for other order questions"
+    )
 
 # Define order receipt parser for order receipt requests
 # Similar to the user information parser, this is used to understand a query in terms of variables
@@ -233,6 +239,7 @@ class OrderReceiptParser(BaseModel):
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     message_type: str
+    order_sub_type: Optional[str]  # Sub-type for order requests (receipt, status, tracking, general)
     order_data: dict  # Store structured order data for agents to use
     user_data: dict  # Store user information for change requests
     parsed_changes: dict  # Store parsed change information
@@ -257,11 +264,10 @@ def classify_message(state: State):
         {
             "role": "system",
             "content": """Classify the user message as one of the following:
-            - 'Order': if the user asks about specific order information such as shipping status, tracking, price, order quantity, order number, etc.
+            - 'Order': if the user asks about specific order information such as shipping status, tracking, price, order quantity, order number, order receipts, etc.
             - 'Email': if the user explicitly mentions email or requests information to be sent via email
             - 'Policy': if the user asks about returns, refunds, return policy, shipping policy,
             exchange policy, warranty, terms of service, company policies, return timeframes, return process, or any store/company rules and procedures
-            - 'Order Receipt': if the user asks about seeing the receipt of a previous order
             - 'Change Information': if the user requests to change, update, or modify their personal information like name, email, phone number, address, etc.
             - 'Message': if the user asks a general question not related to orders, policies, or email requests
             
@@ -276,11 +282,35 @@ def classify_message(state: State):
             Be very specific: 
             - If the message contains words like 'return', 'policy', 'refund', 'exchange', 'warranty', or asks about company procedures, classify as 'Policy'
             - If the message contains words like 'change', 'update', 'modify' combined with personal information (name, email, phone, address), classify as 'Change Information'
-            - If the message asks for receipts or receipt information, classify as 'Order Receipt'"""
+            - If the message asks for receipts, receipt information, order status, tracking, or any order-related information, classify as 'Order'"""
         },
         {"role": "user", "content": last_message.content}
     ])
     print(f"CLASSIFIED AS: {result.message_type}")
+    
+    # If it's an Order type, determine the sub-type
+    if result.message_type == "Order":
+        sub_type_llm = llm.with_structured_output(OrderSubTypeParser)
+        sub_type_result = sub_type_llm.invoke([
+            {
+                "role": "system",
+                "content": """Classify the specific type of order request:
+                - 'receipt': if the user asks for order receipts, receipt information, or wants to see/download receipts
+                - 'status': if the user asks about order status, order progress, or order updates
+                - 'tracking': if the user asks about shipping tracking, delivery status, or tracking numbers
+                - 'general': for other order-related questions like order history, order details, etc.
+                
+                Examples:
+                - "Can I get a receipt for my order?" -> receipt
+                - "What's the status of my order?" -> status
+                - "Where is my package?" -> tracking
+                - "Show me my order history" -> general"""
+            },
+            {"role": "user", "content": last_message.content}
+        ])
+        print(f"ORDER SUB-TYPE: {sub_type_result.order_sub_type}")
+        return {"message_type": result.message_type, "order_sub_type": sub_type_result.order_sub_type}
+    
     return {"message_type": result.message_type}
 
 #Pretty basic router that gets the message type of our current state, routes to respective node
@@ -292,8 +322,6 @@ def router(state: State):
         return {"next": "email"}
     if message_type == "Policy":
         return {"next": "policy"}
-    if message_type == "Order Receipt":
-        return {"next": "email"}
     if message_type == "Change Information":
         return {"next": "message"}
     if message_type == "Message":
@@ -305,8 +333,14 @@ def router(state: State):
 def order_agent(state: State):
     last_message = state["messages"][-1]
     user_message = last_message.content
+    order_sub_type = state.get("order_sub_type", "general")
+    conversation_context = state.get("conversation_context", {})
     
-
+    # Handle order receipt requests
+    if order_sub_type == "receipt":
+        return handle_order_receipt_request(state)
+    
+    # Handle other order types (status, tracking, general)
     messages = [
         {"role": "system",
         "content": f"""You are an order agent. Your job is to help customers with information related to their orders. You can
@@ -314,6 +348,8 @@ def order_agent(state: State):
         you are to create an autonomous, standardized response.
         Do not directly mention the inner workings of this system, instead focus on the user's requests.
 
+        Order request type: {order_sub_type}
+        
         Here is the order information I found (if any):
 
         Use this information to provide helpful responses about orders.
@@ -343,10 +379,6 @@ def email_agent(state: State):
     # Check if this is a triggered email notification for information changes
     if state.get("needs_email_notification") and state.get("changes_made"):
         return handle_information_change_notification(state)
-    
-    # Handle Order Receipt requests specially
-    if message_type == "Order Receipt":
-        return handle_order_receipt_request(state)
     
     # Default email handling for other email requests
     messages = [
@@ -540,10 +572,6 @@ def message_agent(state: State):
     # Handle Change Information requests 
     if message_type == "Change Information":
         return handle_change_information(state)
-    
-    # Handle Order Receipt requests
-    elif message_type == "Order Receipt":
-        return handle_order_receipt(state)
     
     # Default message handling
     messages = [
@@ -1430,7 +1458,7 @@ if __name__ == "__main__":
     run_chatbot()
 
 #Uncomment and put in separate cell, execute to generate graph image.
-"""try:
+try:
     display(Image(graph.get_graph().draw_mermaid_png()))
 except Exception:
-    pass"""
+    pass
