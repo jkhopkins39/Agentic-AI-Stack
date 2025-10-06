@@ -598,7 +598,7 @@ def get_database_connection():
             port=os.getenv('DB_PORT', '5432'),
             database=os.getenv('DB_NAME', 'AgenticAIStackDB'),
             user=os.getenv('DB_USER', 'AgenticAIStackDB'),
-            password=os.getenv('DB_PASSWORD', '8%w=r?D52Eo2EwcVW:'),
+            password=os.getenv('DB_PASSWORD'),  # Required - must be set in .env file
             cursor_factory=RealDictCursor
         )
         return conn
@@ -810,7 +810,7 @@ def send_information_change_email(changes_made: list, recipient_email: str = "je
     smtp_server = "smtp.sendgrid.net"
     smtp_port = 587  # Using TLS port
     smtp_username = "apikey"
-    smtp_password = os.getenv('SENDGRID_API_KEY')
+    smtp_password = os.getenv('SENDGRID_API_KEY')  # Required - must be set in .env file
     
     if not smtp_password:
         print("SendGrid API key not found in environment variables")
@@ -914,7 +914,7 @@ def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyho
     smtp_server = "smtp.sendgrid.net"
     smtp_port = 587  # Using TLS port
     smtp_username = "apikey"
-    smtp_password = os.getenv('SENDGRID_API_KEY')
+    smtp_password = os.getenv('SENDGRID_API_KEY')  # Required - must be set in .env file
     
     if not smtp_password:
         print("SendGrid API key not found in environment variables")
