@@ -5,6 +5,19 @@ from psycopg2.extras import RealDictCursor # For dict-like cursor results
 import uuid # For generating unique session IDs
 import json # For JSON operations
 import re # For regex pattern matching
+import time
+import asyncio
+from typing import Tuple
+import concurrent.futures
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from threading import Thread
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import HTTPException
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from pydantic import BaseModel
+import threading
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from datetime import datetime, timedelta # For date/time operations
 import smtplib # For email service
 from email.mime.text import MIMEText # Additionally used for email service
@@ -14,17 +27,15 @@ from typing import Annotated, Literal, Optional, List, Dict, Any # Different dat
 from dotenv import load_dotenv # Importing dotenv to get API key from .env file
 from pydantic import BaseModel, Field # Used for validation and structuring message classification
 from typing_extensions import TypedDict # State typed dict contains typed keys messages, message_type, order_data
-from langchain.document_loaders.pdf import PyPDFDirectoryLoader # Importing PDF loader from Langchain
-from langchain.text_splitter import RecursiveCharacterTextSplitter # Importing text splitter from Langchain
-from langchain.embeddings import OpenAIEmbeddings # Importing OpenAI embeddings from Langchain
-from langchain.schema import Document # Importing Document schema from Langchain
-from langchain_core.prompts import ChatPromptTemplate # Importing ChatPromptTemplate for prompt formatting
-from langchain.vectorstores.chroma import Chroma # Importing Chroma vector store from Langchain
-from langchain.chat_models import ChatOpenAI # Import OpenAI LLM
-from langgraph.graph import StateGraph, START, END # These are nodes in graph
-from langgraph.graph.message import add_messages # Messages between nodes
-from langchain.chat_models import init_chat_model # Initialization using whatever chatbot API you're using
-from IPython.display import Image, display # This is for displaying the graph visualization
+from langchain_community.document_loaders import PyPDFDirectoryLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_community.vectorstores import Chroma
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
 
 # Data path reads in txt file for policy RAG
 DATA_PATH = os.path.join(os.getcwd())
@@ -99,6 +110,7 @@ def save_to_chroma(chunks: list[Document]):
           shutil.rmtree(CHROMA_PATH)
         raise
 
+
 def load_policy_text():
     # Load policy as a document, this run uses the txt not pdf
     policy_path = "policy.txt"
@@ -116,6 +128,255 @@ def generate_data_store():
     save_to_chroma(chunks) # Save the processed data to a data store
 
 load_dotenv()
+
+KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
+
+from contextlib import asynccontextmanager
+PRIORITY_TOPICS = {
+    'Order': ['tasks.order.p1', 'tasks.order.p2', 'tasks.order.p3'],
+    'Email': ['tasks.email.p1', 'tasks.email.p2', 'tasks.email.p3'],
+    'Policy': ['tasks.policy.p1', 'tasks.policy.p2', 'tasks.policy.p3'],
+    'Message': ['tasks.message.p1', 'tasks.message.p2', 'tasks.message.p3'],
+}
+
+
+class PriorityConsumer:
+    """
+    Consumes from priority topics (p1, p2, p3) and processes with agents
+    """
+    def __init__(self):
+        self.consumers = {}
+        self.running = False
+        
+    async def start(self):
+        """Start all priority consumers"""
+        self.running = True
+        
+        # Start a consumer task for each agent type
+        tasks = [
+            asyncio.create_task(self.run_priority_consumer("Order", order_agent)),
+            asyncio.create_task(self.run_priority_consumer("Email", email_agent)),
+            asyncio.create_task(self.run_priority_consumer("Policy", policy_agent)),
+            asyncio.create_task(self.run_priority_consumer("Message", message_agent)),
+        ]
+        
+        print("🔵 All priority consumers started")
+        await asyncio.gather(*tasks)
+        
+    async def run_priority_consumer(self, agent_type: str, agent_handler_func):
+        """
+        Run a priority consumer that checks p1 > p2 > p3 in order
+        """
+        topics = PRIORITY_TOPICS[agent_type]
+    
+        # Create consumers for all priority levels
+        consumers = {}
+        for i, topic in enumerate(topics, start=1):
+            consumer = AIOKafkaConsumer(
+                topic,
+                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+                group_id=f"{agent_type.lower()}-agent-group-v2",
+                value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+                auto_offset_reset="earliest",
+                enable_auto_commit=False,
+            )
+            await consumer.start()
+            
+            # Wait for assignment
+            while not consumer.assignment():
+                await asyncio.sleep(0.5)
+            
+    
+            consumers[i] = consumer
+            print(f"🔵 Started consumer for {topic}")
+        
+        # Debug info
+        print(f"✅ {agent_type} has {len(consumers)} consumers ready")
+        for i, c in consumers.items():
+            print(f"   P{i}: {c.assignment()}")
+        
+        # Priority polling loop
+        last_p3_check = time.time()
+        p3_check_interval = 5.0
+        
+        try:
+            while self.running:
+                event = None
+                current_priority = None
+                
+                # Check p1 (highest priority) first
+                try:
+                    data = await consumers[1].getmany(timeout_ms=50, max_records=1)
+                    if data:
+                        for tp, messages in data.items():
+                            if messages:
+                                msg = messages[0]
+                                event, current_priority = msg.value, 1
+                                topic = topics[0]
+                                print(f"✅ {agent_type} got message from p1")
+                                break
+                except Exception as e:
+                    print(f"⚠️ {agent_type} p1: {type(e).__name__}: {e}")
+
+                # Then p2
+                if not event:
+                    try:
+                        data = await consumers[2].getmany(timeout_ms=50, max_records=1)
+                        if data:
+                            for tp, messages in data.items():
+                                if messages:
+                                    msg = messages[0]
+                                    event, current_priority = msg.value, 2
+                                    topic = topics[1]
+                                    print(f"✅ {agent_type} got message from p2")
+                                    break
+                    except Exception as e:
+                        print(f"⚠️ {agent_type} p2: {type(e).__name__}: {e}")
+
+                # Check p3 periodically  
+                if not event:
+                    now = time.time()
+                    if now - last_p3_check >= p3_check_interval:
+                        last_p3_check = now
+                        print(f"🔍 {agent_type} checking p3...")
+                        try:
+                            data = await consumers[3].getmany(timeout_ms=50, max_records=1)
+                            if data:
+                                for tp, messages in data.items():
+                                    if messages:
+                                        msg = messages[0]
+                                        event, current_priority = msg.value, 3
+                                        topic = topics[2]
+                                        print(f"✅ {agent_type} got message from p3")
+                                        break
+                        except Exception as e:
+                            print(f"⚠️ {agent_type} p3: {type(e).__name__}: {e}")
+                
+                if event:
+                    # Skip messages older than 1 hour to prevent backlog processing
+                    event_time = event.get("event_timestamp", 0)
+                    message_age_ms = time.time() * 1000 - event_time
+                    if message_age_ms > 3600000:  # 1 hour = 3,600,000 ms
+                        print(f"⏭️  Skipping old message (age: {message_age_ms/1000:.0f}s)")
+                        await consumers[current_priority].commit()
+                        continue  # Skip to next message
+                    
+                    session_id = event.get("session_id", "unknown")
+                    print(f"→ Consumed {session_id} from {topic}")
+    
+                    try:
+                        # Extract state
+                        state = event.get("state", {})
+                        
+                        # Process with agent handler
+                        if asyncio.iscoroutinefunction(agent_handler_func):
+                            result = await agent_handler_func(state)
+                        else:
+                            result = agent_handler_func(state)
+                        
+                        # Extract agent response
+                        last_message = result.get("messages", [{}])[-1]
+                        agent_response = last_message.get("content", "")
+                        
+                        # Clean agent prefix if present
+                        if ": " in agent_response:
+                            agent_response = agent_response.split(": ", 1)[1]
+                        
+                        print(f"→ {agent_type} agent processed {session_id}")
+                        
+                        # Publish response to agent.responses
+                        response_event = {
+                            "session_id": session_id,
+                            "conversation_id": event.get("conversation_id"),
+                            "agent_type": agent_type.upper() + "_AGENT",
+                            "message": agent_response,
+                            "status": "completed",
+                            "priority": current_priority,
+                            "timestamp": int(time.time() * 1000)
+                        }
+                        
+                        await producer.send_and_wait(
+                            RESPONSE_TOPIC,
+                            value=response_event,
+                            key=session_id
+                        )
+                        
+                        print(f"→ Published agent response for {session_id}")
+                        
+                        # Commit offset after successful processing
+                        await consumers[current_priority].commit()
+                        
+                    except Exception as e:
+                        print(f"✗ {agent_type} agent error for {session_id}: {e}")
+                
+                # Small sleep to prevent tight loop
+                await asyncio.sleep(0.01)
+                
+        finally:
+            for consumer in consumers.values():
+                await consumer.stop()
+            print(f"🔴 {agent_type} priority consumer stopped")
+    async def stop(self):
+        """Stop all consumers"""
+        self.running = False
+
+    app = FastAPI()
+
+    # Globals
+    producer: AIOKafkaProducer | None = None
+    routing_task: asyncio.Task | None = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global producer, priority_consumer
+        
+        # Startup
+    producer = AIOKafkaProducer(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        key_serializer=lambda v: v.encode("utf-8") if v else None
+    )
+    await producer.start()
+    print("✓ Kafka producer started")
+        
+    # Start orchestrator consumer
+    asyncio.create_task(orchestrator_consumer())
+        
+    # Start priority consumers
+    priority_consumer = PriorityConsumer()
+    asyncio.create_task(priority_consumer.start())
+        
+    yield
+        
+    # Shutdown
+    if priority_consumer:
+        await priority_consumer.stop()
+        
+    if producer:
+        await producer.stop()
+        print("✗ Kafka producer stopped")
+
+app = FastAPI(lifespan=lifespan)
+
+
+producer: AIOKafkaProducer | None = None
+
+INGRESS_TOPIC = 'system.ingress'
+RESPONSE_TOPIC = 'agent.responses'
+
+async def publish_to_kafka(topic: str, priority: int, payload: dict, key: str | None = None):
+    if not producer:
+        raise RuntimeError("Kafka producer not initialized")
+    try:
+        await producer.send_and_wait(
+            topic,
+            value=payload,
+            key=key  # ✅ Let the serializer handle encoding
+        )
+    except Exception as e:
+        print(f"❌ Publish error: {e}")
+        raise
+
 
 # This will be called automatically when needed
 # generate_data_store()
@@ -193,8 +454,8 @@ load_dotenv()
 # Session configuration since we do not have user account tracking set up yet
 SESSION_EMAIL = "jeremyyhop@gmail.com"
 
-#Load Haiku, a more lightweight and fast model from Anthropic
-llm = init_chat_model("anthropic:claude-3-haiku-20240307")
+from langchain_anthropic import ChatAnthropic
+llm = ChatAnthropic(model="claude-3-haiku-20240307")
 
 # Load ChatGPT 4o Mini
 #llm = init_chat_model("openai:gpt-4o-mini")
@@ -244,10 +505,32 @@ class State(TypedDict):
     changes_made: list  # List of changes made for email notification
     needs_email_notification: bool  # Flag to trigger email notification
 
+def classify_priority(query_text: str, message_type: str, event: dict) -> int:
+    """
+    Classify message priority:
+    1 = Critical (errors, urgent issues)
+    2 = High (orders, account changes)
+    3 = Normal (general queries)
+    """
+    query_lower = query_text.lower()
+    
+    # P1: Critical
+    if any(word in query_lower for word in ['urgent', 'emergency', 'error', 'broken', 'not working']):
+        return 1
+    
+    # P2: High priority
+    if message_type in ['Order', 'Change Information']:
+        return 2
+    
+    # P3: Normal
+    return 3
+
 #last message is stored in the -1 column of our messages array.
 def classify_message(state: State):
     last_message = state["messages"][-1]
-    print(f"CLASSIFYING MESSAGE: {last_message.content}")
+    # Handle both dict and object message formats
+    message_content = last_message.get("content") if isinstance(last_message, dict) else last_message.content
+    print(f"CLASSIFYING MESSAGE: {message_content}")
 
     #we use a LangChain method to wrap the base language model to conform with message classifier schema. 
     classifier_llm = llm.with_structured_output(MessageClassifier)
@@ -278,10 +561,21 @@ def classify_message(state: State):
             - If the message contains words like 'change', 'update', 'modify' combined with personal information (name, email, phone, address), classify as 'Change Information'
             - If the message asks for receipts or receipt information, classify as 'Order Receipt'"""
         },
-        {"role": "user", "content": last_message.content}
+        {"role": "user", "content": message_content}
     ])
     print(f"CLASSIFIED AS: {result.message_type}")
-    return {"message_type": result.message_type}
+    
+    priority = classify_priority(
+        message_content,  # ✅ Use the variable you already extracted above
+        result.message_type,
+        state
+    )
+    
+    return {
+        "message_type": result.message_type,
+        "priority": priority
+    }
+
 
 #Pretty basic router that gets the message type of our current state, routes to respective node
 def router(state: State):
@@ -302,11 +596,14 @@ def router(state: State):
 
 # The order agent will be used for retrieval of order data upon request
 
-def order_agent(state: State):
+async def order_agent(state: State):
     last_message = state["messages"][-1]
-    user_message = last_message.content
-    
 
+    user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
+
+    session_id = state.get("session_id", str(uuid.uuid4()))
+    conversation_id = state.get("conversation_id", str(uuid.uuid4()))
+    
     messages = [
         {"role": "system",
         "content": f"""You are an order agent. Your job is to help customers with information related to their orders. You can
@@ -324,45 +621,96 @@ def order_agent(state: State):
             "content": user_message
         }
     ]
+
     reply = llm.invoke(messages)
     print(f"Order agent response: {reply.content}")
     
     
+    await publish_to_kafka(
+        "RESPONSE_TOPIC",
+        None,
+        {
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "agent_type": "ORDER_AGENT",
+            "message": reply.content,
+            "order_data": state.get("order_data", {}),
+            "status": "response",
+        },
+        key=session_id,
+    )
+
+    # Publish order event for backend processing (if order data exists)
+    order_data = state.get("order_data", {})
+    if order_data:
+        await publish_to_kafka(
+            "agent.responses",
+            1,  # priority
+            {
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "agent_type": "Order",
+                "message": reply.content,
+                "status": "completed",
+                "timestamp": int(time.time() * 1000),
+            },
+            key=session_id,
+        )
+
     return {
         "messages": [{"role": "assistant", "content": f"Order Agent: {reply.content}"}]
     }
 
-"""The email agent is responsible for delivering structured, autonomous emails. At present, this includes
-order receipts and notification of account information changes."""
-def email_agent(state: State):
+
+import uuid, time
+
+async def email_agent(state: State):
     last_message = state["messages"][-1]
-    user_message = last_message.content
+    user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
+
     message_type = state.get("message_type", "Email")
     conversation_context = state.get("conversation_context", {})
-    
-    # Check if this is a triggered email notification for information changes
+
+    session_id = state.get("session_id", str(uuid.uuid4()))
+    conversation_id = state.get("conversation_id", str(uuid.uuid4()))
+
+    # Branch 1: triggered email notification
     if state.get("needs_email_notification") and state.get("changes_made"):
-        return handle_information_change_notification(state)
-    
-    # Handle Order Receipt requests specially
+        return await handle_information_change_notification(state)
+
+    # Branch 2: order receipt
     if message_type == "Order Receipt":
-        return handle_order_receipt_request(state)
-    
-    # Default email handling for other email requests
+        return await handle_order_receipt_request(state)
+
+    # Default branch: fall back to LLM
     messages = [
-        {"role": "system",
-        "content": """You are an email agent. Your job is to help customers by delivering data in a structured format via email.
-        Do not directly mention the inner workings of this system, instead focus on the user's requests.
-        """
-        },
-        {
-            "role": "user",
-            "content": user_message
-        }
+        {"role": "system", "content": """You are an email agent. 
+        Your job is to help customers by delivering data in a structured format via email.
+        Do not expose system internals; focus only on the user’s request."""},
+        {"role": "user", "content": user_message},
     ]
-    reply = llm.invoke(messages)
+
+    reply = await llm.ainvoke(messages)
     print(f"Email agent response: {reply.content}")
-    return {"messages": [{"role": "assistant", "content": f"Email Agent: {reply.content}"}]}
+
+    await publish_to_kafka(
+        "agent.responses",
+        2,
+        {
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "agent_type": "Email",
+            "message": reply.content,
+            "status": "completed",
+            "timestamp": int(time.time() * 1000),
+        },
+        key=session_id,
+    )
+
+    return {
+        "messages": [{"role": "assistant", "content": f"Email Agent: {reply.content}"}]
+    }
+
 
 # It checks the state for changes made and sends an email notification
 def handle_information_change_notification(state: State):
@@ -395,7 +743,8 @@ an LLM to parse the request and extract relevant variables. It is called conditi
 to reduce number of API calls and latency"""
 def handle_order_receipt_request(state: State):
     last_message = state["messages"][-1]
-    user_message = last_message.content
+    user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
+
     conversation_context = state.get("conversation_context", {})
     
     # Parse the order receipt request
@@ -484,94 +833,136 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
         "conversation_context": updated_context
     }
 
+
 #The policy agent uses retrieval augmented generation to recall policy information from policy.txt
-def policy_agent(state: State):
+import uuid
+
+async def policy_agent(state: State):
     last_message = state["messages"][-1]
-    user_question = last_message.content
-    
-    #Use RAG system to query policy information
+    user_question = last_message.get("content") if isinstance(last_message, dict) else last_message.content
+
+    session_id = state.get("session_id", str(uuid.uuid4()))
+    conversation_id = state.get("conversation_id", str(uuid.uuid4()))
+
     try:
-        #Use the existing query_rag function to get policy-specific information
-        formatted_response, policy_response = query_rag(user_question)
-        
-        #Create messages with the policy context
+        # Use the existing query_rag function to get policy-specific information
+        # (wrap in asyncio.to_thread if it's blocking)
+        formatted_response, policy_response = await asyncio.to_thread(query_rag, user_question)
+
+        # Create messages with the policy context
         messages = [
-            {"role": "system",
-            "content": f"""You are a policy agent. Your job is to help customers with questions that appear to be related to company policy,
-            such as how long deliveries usually take, how returns are handled, and how the company runs things. 
-            
-            Based on the policy information retrieved: {policy_response}
-            
-            Use this specific policy information to answer the customer's question. Be direct and specific based on the policy content.
-            Do not directly mention the inner workings of this system, instead focus on the user's requests."""
-            },
             {
-                "role": "user",
-                "content": user_question
-            }
+                "role": "system",
+                "content": f"""You are a policy agent. Your job is to help customers with questions that appear to be related to company policy,
+                such as how long deliveries usually take, how returns are handled, and how the company runs things. 
+                
+                Based on the policy information retrieved: {policy_response}
+                
+                Use this specific policy information to answer the customer's question. Be direct and specific based on the policy content.
+                Do not directly mention the inner workings of this system, instead focus on the user's requests."""
+            },
+            {"role": "user", "content": user_question},
         ]
-        reply = llm.invoke(messages)
+
+        reply = await llm.ainvoke(messages)
         print(f"Policy agent response: {reply.content}")
-        return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
-        
-    except Exception as e:
-        #Fallback to general policy response if RAG fails
-        messages = [
-            {"role": "system",
-            "content": """You are a policy agent. Your job is to help customers with questions that appear to be related to company policy,
-            such as how long deliveries usually take, how returns are handled, and how the company runs things. You are to refer to the written policy
-            and inform the user how to contact the store when information can't be retrieved for one reason or another.
-            Do not directly mention the inner workings of this system, instead focus on the user's requests."""
-            },
+
+        await publish_to_kafka(
+            "agent.responses",  # actual topic name
+            2,  # priority (1=critical, 2=high, 3=normal)
             {
-                "role": "user",
-                "content": user_question
-            }
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "agent_type": "Policy",  # keep naming consistent
+                "message": reply.content,
+                "status": "completed",
+                "timestamp": int(time.time() * 1000),
+            },
+            key=session_id,
+        )
+
+        return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
+
+    except Exception as e:
+        # Fallback to general policy response if RAG fails
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a policy agent. Your job is to help customers with questions that appear to be related to company policy,
+                such as how long deliveries usually take, how returns are handled, and how the company runs things. You are to refer to the written policy
+                and inform the user how to contact the store when information can't be retrieved for one reason or another.
+                Do not directly mention the inner workings of this system, instead focus on the user's requests."""
+            },
+            {"role": "user", "content": user_question},
         ]
-        reply = llm.invoke(messages)
+
+        reply = await llm.ainvoke(messages)
         print(f"Policy agent response (fallback): {reply.content}")
+
         return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
 
 #This is the default agent that is routed to if the request has nothing to do with orders or emails
-def message_agent(state: State):
+import uuid, time, asyncio
+
+async def message_agent(state: State):
     last_message = state["messages"][-1]
     message_type = state.get("message_type", "Message")
-    
-    # Handle Change Information requests 
+
+    session_id = state.get("session_id", str(uuid.uuid4()))
+    conversation_id = state.get("conversation_id", str(uuid.uuid4()))
+
+    # Branch 1: Handle Change Information requests
     if message_type == "Change Information":
-        return handle_change_information(state)
-    
-    # Handle Order Receipt requests
+        return handle_change_information(state)  # ✅ No await
+
+    # Branch 2: Handle Order Receipt requests
     elif message_type == "Order Receipt":
-        return handle_order_receipt(state)
+        return handle_order_receipt(state)  # ✅ No await
     
-    # Default message handling
+    # Default branch continues...
+
+    # Default branch: freeform message handling
+    user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
     messages = [
-        {"role": "system",
-        "content": """You are a message agent. Your job is to provide structured responses and help the customer the best that you can.
-        Refer the relevant information from the user's request to the orchestrator agent in a structured manner so that customers can
-        be helped with their specific use case. Do not directly mention the inner workings of this system, instead focus on the user's requests."""
-        },
         {
-            "role": "user",
-            "content": last_message.content
-        }
+            "role": "system",
+            "content": """You are a message agent. Your job is to provide structured responses and help the customer the best that you can.
+            Refer the relevant information from the user's request to the orchestrator agent in a structured manner so that customers can
+            be helped with their specific use case. Do not directly mention the inner workings of this system, instead focus on the user's requests."""
+        },
+        {"role": "user", "content": user_message},
     ]
-    reply = llm.invoke(messages)
+
+    reply = await llm.ainvoke(messages)
     print(f"Message agent response: {reply.content}")
+
+    await publish_to_kafka(
+        "agent.responses",  # actual topic name
+        2,  # priority (1=critical, 2=high, 3=normal)
+        {
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "agent_type": "Message",  # keep naming consistent
+            "message": reply.content,
+            "status": "completed",
+            "timestamp": int(time.time() * 1000),
+        },
+        key=session_id,
+    )
+
     return {"messages": [{"role": "assistant", "content": f"Message Agent: {reply.content}"}]}
+
 
 #Get database connection using environment variables. At present, database connection is used for change user info and receipt emails
 def get_database_connection():
     try:
         # Establish connection to our PostgreSQL database (contains user info and orders)
         conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
+            host=os.getenv('DB_HOST', '127.0.0.1'),
             port=os.getenv('DB_PORT', '5432'),
             database=os.getenv('DB_NAME', 'AgenticAIStackDB'),
             user=os.getenv('DB_USER', 'AgenticAIStackDB'),
-            password=os.getenv('DB_PASSWORD'),  # Required - must be set in .env file
-            cursor_factory=RealDictCursor
+            password=os.getenv('DB_PASSWORD')
         )
         return conn
     except Exception as e:
@@ -1113,7 +1504,7 @@ def get_conversation_history(conversation_id: str) -> List[Dict[str, Any]]:
 def handle_change_information(state: State):
     """Handle change information requests with multi-turn conversation support"""
     last_message = state["messages"][-1]
-    user_message = last_message.content
+    user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
     conversation_context = state.get("conversation_context", {})
     
     # No need for email handling - we use SESSION_EMAIL
@@ -1244,10 +1635,13 @@ def handle_order_receipt(state: State):
         "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}]
     }
 
+
+
 # Orchestrator agent to manage agent responses and trigger followup actions
 def orchestrator_agent(state: State):
     """Enhanced orchestrator that manages agent responses and triggers follow-up actions"""
     last_message = state["messages"][-1]
+
     
     # Check if information was changed and we need to send a notification email
     if state.get("information_changed") and state.get("needs_email_notification"):
@@ -1284,6 +1678,203 @@ def orchestrator_agent(state: State):
         # Fallback for unexpected cases
         print(f"Orchestrator fallback response")
         return {"messages": [{"role": "assistant", "content": "I'm here to help you. How can I assist you today?"}]}
+    
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class IngressMessage(BaseModel):
+    session_id: str
+    user_id: Optional[str] = None
+    query_text: str
+    correlation_id: Optional[str] = None
+    event_timestamp: Optional[int] = None
+
+priority_consumer: PriorityConsumer | None = None
+
+
+# Create a single producer instance at startup
+producer: AIOKafkaProducer | None = None
+
+
+@app.post("/publish/ingress")
+async def publish_to_ingress(message: IngressMessage):
+    """Publish message from frontend to system.ingress topic"""
+    if not message.event_timestamp:
+        message.event_timestamp = int(time.time() * 1000)
+    if not message.correlation_id:
+        message.correlation_id = f"corr-{uuid.uuid4()}"
+    
+    kafka_message = {
+        "session_id": message.session_id,
+        "user_id": message.user_id,
+        "query_text": message.query_text,
+        "correlation_id": message.correlation_id,
+        "event_timestamp": message.event_timestamp,
+        "event_type": "CUSTOMER_QUERY",
+        "status": "pending"
+    }
+    
+    try:
+        await producer.send_and_wait(
+            INGRESS_TOPIC,
+            value=kafka_message,
+            key=message.session_id
+        )
+        
+        print(f"→ Published ingress for {message.session_id}")
+        return {"success": True, "message": f"Published to {INGRESS_TOPIC}"}
+    except Exception as e:
+        print(f"✗ Publish error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.websocket("/ws/agent-responses/{session_id}")
+async def websocket_agent_responses(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    print(f"✓ WebSocket connected: {session_id}")
+    
+    consumer = AIOKafkaConsumer(
+        RESPONSE_TOPIC,
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        group_id=f"ws-{session_id}",
+        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+        auto_offset_reset="latest",  # ✅ Change back to latest
+        enable_auto_commit=True,
+        session_timeout_ms=6000,
+        request_timeout_ms=30000
+    )
+    
+    await consumer.start()
+    
+    # ✅ Add timestamp filter here too
+    try:
+        async for message in consumer:
+            event = message.value
+            
+            # Only send messages from the last 10 seconds (prevents old duplicates)
+            event_time = event.get("timestamp", 0)
+            if time.time() * 1000 - event_time > 10000:
+                continue
+                
+            if event.get("session_id") == session_id:
+                await websocket.send_json(event)
+                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+    except Exception as e:
+        print(f"✗ WebSocket consumer error: {e}")
+    finally:
+        await consumer.stop()
+        await websocket.close()
+        print(f"✗ WebSocket disconnected: {session_id}")
+async def orchestrator_consumer():
+    """
+    Enhanced orchestrator that:
+    1. Consumes from system.ingress
+    2. Classifies and routes to priority topics
+    3. Does NOT call agents directly
+    """
+    consumer = AIOKafkaConsumer(
+        INGRESS_TOPIC,
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        group_id="orchestrator-group-v2",
+        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+        auto_offset_reset="earliest"
+    )
+    
+    await consumer.start()
+    print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
+
+# Wait for partition assignment
+    while not consumer.assignment():
+        print("⏳ Waiting for partition assignment...")
+        await asyncio.sleep(0.5)
+
+    print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
+
+    print(f"🔍 Orchestrator ENTERING async for loop")
+    try:
+        async for message in consumer:
+            print(f"⚡ LOOP ITERATION - got message from partition {message.partition}")  # ADD THIS
+            print(f"🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
+            event = message.value
+            session_id = event.get("session_id", "unknown")
+            print(f"→ Orchestrator received event for {session_id}")
+            
+            try:
+                # Build state from event
+                state = {
+                    "messages": [{"role": "user", "content": event.get("query_text", "")}],
+                    "message_type": None,
+                    "order_data": {},
+                    "user_data": {},
+                    "parsed_changes": {},
+                    "conversation_id": event.get("conversation_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "conversation_context": {},
+                    "message_order": 0,
+                    "information_changed": False,
+                    "changes_made": [],
+                    "needs_email_notification": False,
+                    "needs_follow_up_email": False,
+                    "next": None
+                }
+                
+                # Classify message type (your existing classify_message function)
+                classification = classify_message(state)
+                state.update(classification)
+                
+                message_type = state.get("message_type", "Message")
+                
+                # Classify priority
+                priority = classify_priority(
+                    event.get("query_text", ""), 
+                    message_type, 
+                    event
+                )
+                
+                # Determine target topic based on message type and priority
+                topic_key = message_type if message_type in PRIORITY_TOPICS else "Message"
+                priority_topics = PRIORITY_TOPICS.get(topic_key, PRIORITY_TOPICS["Message"])
+                target_topic = priority_topics[priority - 1]  # priority 1->p1, 2->p2, 3->p3
+                
+                # Create routing event
+                routing_event = {
+                    "session_id": session_id,
+                    "conversation_id": state["conversation_id"],
+                    "message_type": message_type,
+                    "priority": priority,
+                    "query_text": event.get("query_text", ""),
+                    "state": state,
+                    "correlation_id": event.get("correlation_id"),
+                    "event_timestamp": event.get("event_timestamp", int(time.time() * 1000))
+                }
+                
+                # Publish to priority topic
+                await producer.send_and_wait(
+                    target_topic,
+                    value=routing_event,
+                    key=session_id
+                )
+                
+                print(f"→ Routed {session_id} to {target_topic} (type: {message_type}, priority: P{priority})")
+                
+            except Exception as e:
+                print(f"✗ Orchestrator error for {session_id}: {e}")
+                
+    finally:
+        await consumer.stop()
+        print("🔴 Orchestrator consumer stopped")
+
 
 #Initialize a state graph, then we add nodes, naming them and linking their respective agents.
 graph_builder = StateGraph(State)
@@ -1324,7 +1915,7 @@ graph_builder.add_conditional_edges(
 )
 graph = graph_builder.compile()
 
-def run_chatbot():
+"""def run_chatbot():
     #Enhanced chatbot with conversation memory. Create session ID and conversation tracking
     session_id = str(uuid.uuid4())
     print(f"Starting conversation w/ session ID: {session_id}")
@@ -1418,11 +2009,9 @@ def run_chatbot():
             print(f"Error: {e}")
             print("Please try again or contact support // agenticaistack@gmail.com.")
 
-if __name__ == "__main__":
-    run_chatbot()
+    """
 
-#Uncomment and put in separate cell, execute to generate graph image.
-"""try:
-    display(Image(graph.get_graph().draw_mermaid_png()))
-except Exception:
-    pass"""
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+

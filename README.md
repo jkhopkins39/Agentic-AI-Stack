@@ -1,79 +1,228 @@
-# Multi-Agent LLM Customer Service Stack
+# Agentic AI Customer Service Stack
 
-### Backend (please edit as needed)
-- **Python** with FastAPI
-- **LangGraph** for agent orchestration
-- **Anthropic Claude** as the LLM provider
-- **PostgreSQL** for data persistence
+A production-ready multi-agent LLM system for intelligent customer service, built with event-driven architecture using Kafka, LangGraph agents, and real-time WebSocket communication.
+
+## 🏗️ Architecture
+
+### Backend Stack
+- **Python 3.11** with FastAPI for REST APIs and WebSocket support
+- **LangGraph** for multi-agent orchestration and workflow management
+- **Anthropic Claude & OpenAI GPT** for intelligent agent responses
+- **Apache Kafka** for event streaming and message routing with priority queues
+- **PostgreSQL** for persistent data storage (users, orders, conversations)
 - **Redis** for session management and caching
+- **Debezium** for Change Data Capture (CDC)
+- **ksqlDB** for stream processing
 
-### Frontend (please edit as needed)
+### Frontend Stack
 - **React 19** with TypeScript
-- **Vite 7** for build tooling
-- **TailwindCSS** for styling
-- **Axios** for API communication
+- **Vite 7** for blazing-fast development and build tooling
+- **TailwindCSS 4** for modern styling
+- **Axios** for HTTP requests and WebSocket communication
 
 ### Infrastructure
-- **Docker** & **Docker Compose** for containerization
+- **Docker & Docker Compose** for containerized deployment
 - **Node.js 20** runtime environment
 
-## Quick Start
+## 🚀 Quick Start
+
+### Prerequisites
+- Docker and Docker Compose installed
+- Node.js 20+ and npm installed
+- Git installed
 
 ### 1. Clone the Repository
 ```bash
-git clone 
-cd multi-agent-llm-frontend
+git clone <your-repo-url>
+cd <your-repo-name>
 ```
 
 ### 2. Environment Setup
-Create a `.env` file in the root directory:
-```bash
-POSTGRES_DB=agent_system
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=password123
-# Get your API keys from:
-# OpenAI: https://platform.openai.com/api-keys
-OPENAI_API_KEY=sk-proj-your-actual-openai-key-here
 
-# Anthropic: https://console.anthropic.com/settings/keys  
-ANTHROPIC_API_KEY=sk-ant-your-actual-anthropic-key-here
+Your `.env` file should already be configured. If not, ensure it contains:
 
-# SendGrid: https://app.sendgrid.com/settings/api_keys
-SENDGRID_API_KEY=SG.your-sendgrid-api-key-here
+```env
+# Database Configuration
+DB_HOST=AgenticAIStackDB
+DB_PORT=5432
+DB_NAME=AgenticAIStackDB
+DB_USER=AgenticAIStackDB
+DB_PASSWORD=your-password-here
 
+# Kafka Configuration
+KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
+# API Keys (Required)
+ANTHROPIC_API_KEY=your-anthropic-key-here
+OPENAI_API_KEY=your-openai-key-here
+SENDGRID_API_KEY=your-sendgrid-key-here
+
+# Session Configuration
+SESSION_EMAIL=your-email@example.com
 ```
 
-### 3. Backend Setup (Docker)
+### 3. Run Setup Script
+
+The setup script initializes Kafka topics, configures Debezium connectors, and sets up the database:
+
 ```bash
-# Start backend services (database, redis, and backend API)
-docker-compose up
+./setup.sh
 ```
 
-The backend will be available at: http://localhost:8000
-
-### 4. Frontend Setup (Local Development) in a separate terminal
-
- **Note**: Frontend Docker configuration is currently under development. Please use local development setup.
+### 4. Build and Start Backend
 
 ```bash
-# Navigate to frontend directory
+docker-compose build backend
+docker-compose up backend
+```
+
+**Note:** This will start all services including Kafka, PostgreSQL, Redis, and the backend API.
+
+The backend will be available at: **http://localhost:8000**
+
+### 5. Start Frontend (in a separate terminal)
+
+```bash
 cd frontend
-
-# Install dependencies
-npm install
-
-# Install TailwindCSS Vite plugin
-npm install @tailwindcss/vite
-
-# Start development server
 npm run dev
 ```
 
-The frontend will be available at: http://localhost:5173 in your browser
+The frontend will be available at: **http://localhost:5173**
 
-## Access Points
+## 🎯 Access Points
 
 - **Frontend Application**: http://localhost:5173
 - **Backend API**: http://localhost:8000
+- **Kafka UI (if configured)**: http://localhost:8080
+- **ksqlDB Server**: http://localhost:8088
 
-## Note that docker compose up will have to be running in one window, or docker compose up -d, and then npm run dev will have to be running as well. If you use the -d flag then you can run npm run dev in the same terminal window.
+## 🧠 Agent System
+
+The stack includes 4 specialized agents:
+
+1. **Order Agent** - Handles order inquiries, tracking, and status updates
+2. **Email Agent** - Manages email notifications and receipt delivery
+3. **Policy Agent** - Uses RAG to answer policy-related questions
+4. **Message Agent** - Handles general queries and information updates
+
+### Priority-Based Routing
+
+Messages are routed to priority queues (P1/P2/P3) based on urgency:
+- **P1 (Critical)**: Urgent issues, errors, system failures
+- **P2 (High)**: Orders, account changes, important requests
+- **P3 (Normal)**: General inquiries, policy questions
+
+## 📁 Project Structure
+
+```
+.
+├── main.py                 # FastAPI backend with agent logic
+├── docker-compose.yml      # Container orchestration
+├── Dockerfile             # Backend container definition
+├── setup.sh               # Infrastructure setup script
+├── policy.txt             # Policy document for RAG
+├── schema.sql             # Database schema
+├── frontend/              # React frontend
+│   ├── src/              # Source files
+│   ├── package.json      # Frontend dependencies
+│   └── vite.config.js    # Vite configuration
+└── README.md             # This file
+```
+
+## 🔧 Development
+
+### Running in Development Mode
+
+For hot-reload during development:
+
+```bash
+# Terminal 1: Backend with auto-reload
+docker-compose up backend
+
+# Terminal 2: Frontend with Vite HMR
+cd frontend
+npm run dev
+```
+
+### Running in Background
+
+To run services in detached mode:
+
+```bash
+docker-compose up -d backend
+cd frontend && npm run dev
+```
+
+### Viewing Logs
+
+```bash
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f backend
+docker-compose logs -f kafka
+```
+
+## 🧪 Testing
+
+The frontend includes Vitest for testing:
+
+```bash
+cd frontend
+npm run test          # Run tests
+npm run test:ui       # Run tests with UI
+```
+
+## 🛑 Stopping Services
+
+```bash
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes (clean slate)
+docker-compose down -v
+```
+
+## 📊 Kafka Topics
+
+The system uses the following topic structure:
+
+- `system.ingress` - Entry point for all customer queries
+- `tasks.{agent}.p{1,2,3}` - Priority queues for each agent type
+- `agent.responses` - Agent responses to frontend
+
+## 🔐 Security Notes
+
+- **Never commit API keys** - Keep your `.env` file out of version control
+- **Update default passwords** - Change all default database passwords
+- **Use environment-specific configs** - Different settings for dev/staging/prod
+
+## 🐛 Troubleshooting
+
+### Backend won't start
+- Check if ports 8000, 5432, 6379, 9092 are available
+- Verify API keys are set in `.env`
+- Run `docker-compose logs backend` for error details
+
+### Frontend won't connect
+- Ensure backend is running on port 8000
+- Check `VITE_API_URL` in frontend environment
+- Verify CORS settings in `main.py`
+
+### Kafka connection issues
+- Wait for Kafka to fully initialize (~30 seconds)
+- Check `docker-compose logs kafka`
+- Verify topics are created: `docker exec kafka kafka-topics --list --bootstrap-server localhost:9092`
+
+## 📝 License
+
+[Your License Here]
+
+## 👥 Contributors
+
+[Your Team/Contributors Here]
+
+## 📧 Support
+
+For issues and questions: agenticaistack@gmail.com
