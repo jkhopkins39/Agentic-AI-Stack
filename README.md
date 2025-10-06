@@ -2,6 +2,8 @@
 
 A production-ready multi-agent LLM system for intelligent customer service, built with event-driven architecture using Kafka, LangGraph agents, and real-time WebSocket communication.
 
+READ THIS TO RUN IT
+
 ## 🏗️ Architecture
 
 ### Backend Stack
