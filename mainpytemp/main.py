@@ -956,19 +956,14 @@ async def message_agent(state: State):
 #Get database connection using environment variables. At present, database connection is used for change user info and receipt emails
 def get_database_connection():
     try:
-        # Try DATABASE_URL first (for Docker)
-        database_url = os.getenv('DATABASE_URL')
-        if database_url:
-            conn = psycopg2.connect(database_url)
-        else:
-            # Fallback to individual variables
-            conn = psycopg2.connect(
-                host=os.getenv('DB_HOST', '127.0.0.1'),
-                port=os.getenv('DB_PORT', '5432'),
-                database=os.getenv('DB_NAME', 'AgenticAIStackDB'),
-                user=os.getenv('DB_USER', 'AgenticAIStackDB'),
-                password=os.getenv('DB_PASSWORD')
-            )
+        # Establish connection to our PostgreSQL database (contains user info and orders)
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', '127.0.0.1'),
+            port=os.getenv('DB_PORT', '5432'),
+            database=os.getenv('DB_NAME', 'AgenticAIStackDB'),
+            user=os.getenv('DB_USER', 'AgenticAIStackDB'),
+            password=os.getenv('DB_PASSWORD')
+        )
         return conn
     except Exception as e:
         print(f"Database connection error: {e}")
@@ -982,7 +977,7 @@ def lookup_user_by_email(email: str):
     
     try:
         # Create a cursor which is a control structure that enables traversal over records in database
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             # Define a query to retrieve user information by email
             query = """
             SELECT id, email, first_name, last_name, phone, created_at, updated_at
@@ -1009,7 +1004,7 @@ def update_user_information(user_id: str, updates: dict):
         return False
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             # Build dynamic update query
             update_fields = []
             values = []
@@ -1051,9 +1046,9 @@ def lookup_order_by_number(order_number: str):
     
     try:
         # Use cursor to execute query
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             query = """
-            SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at, o.updated_at, o.shipped_at, o.delivered_at,
+            SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
                    u.email, u.first_name, u.last_name,
                    array_agg(
                        json_build_object(
@@ -1068,7 +1063,7 @@ def lookup_order_by_number(order_number: str):
             JOIN order_items oi ON o.id = oi.order_id
             JOIN products p ON oi.product_id = p.id
             WHERE UPPER(o.order_number) = UPPER(%s)
-            GROUP BY o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at, o.updated_at, o.shipped_at, o.delivered_at,
+            GROUP BY o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
                      u.email, u.first_name, u.last_name
             """
             cursor.execute(query, (order_number,))
@@ -1087,9 +1082,9 @@ def lookup_orders_by_email(email: str, limit: int = 10):
         return []
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             query = """
-            SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at, o.updated_at, o.shipped_at, o.delivered_at,
+            SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
                    u.email, u.first_name, u.last_name,
                    array_agg(
                        json_build_object(
@@ -1104,7 +1099,7 @@ def lookup_orders_by_email(email: str, limit: int = 10):
             JOIN order_items oi ON o.id = oi.order_id
             JOIN products p ON oi.product_id = p.id
             WHERE LOWER(u.email) = LOWER(%s)
-            GROUP BY o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at, o.updated_at, o.shipped_at, o.delivered_at,
+            GROUP BY o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
                      u.email, u.first_name, u.last_name
             ORDER BY o.created_at DESC
             LIMIT %s
@@ -1125,7 +1120,7 @@ def lookup_orders_by_product_name(product_name: str, user_email: Optional[str] =
         return []
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             base_query = """
             SELECT DISTINCT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
                    u.email, u.first_name, u.last_name,
@@ -1374,7 +1369,7 @@ def create_conversation(session_id: str, user_id: Optional[str] = None, user_ema
         return None
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             conversation_id = str(uuid.uuid4())
             query = """
             INSERT INTO conversations (id, session_id, user_id, user_email, conversation_type, context)
@@ -1397,7 +1392,7 @@ def get_conversation(session_id: str) -> Optional[Dict[str, Any]]:
         return None
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             query = """
             SELECT id, session_id, user_id, user_email, status, conversation_type, context, created_at, updated_at
             FROM conversations 
@@ -1423,7 +1418,7 @@ def update_conversation_context(conversation_id: str, context: Dict[str, Any],
         return False
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             # Build dynamic update query
             update_fields = ["context = %s", "updated_at = CURRENT_TIMESTAMP"]
             values = [json.dumps(context)]
@@ -1463,7 +1458,7 @@ def save_query_to_conversation(conversation_id: str, user_message: str, agent_ty
         return None
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             query_id = str(uuid.uuid4())
             query = """
             INSERT INTO queries (id, conversation_id, user_id, query_text, agent_type, agent_response, 
@@ -1489,7 +1484,7 @@ def get_conversation_history(conversation_id: str) -> List[Dict[str, Any]]:
         return []
     
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor() as cursor:
             query = """
             SELECT query_text, agent_type, agent_response, message_order, created_at
             FROM queries 
@@ -1705,60 +1700,6 @@ class IngressMessage(BaseModel):
     correlation_id: Optional[str] = None
     event_timestamp: Optional[int] = None
 
-# API Response Models
-class UserProfile(BaseModel):
-    id: str
-    email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    phone: Optional[str] = None
-    created_at: str
-    updated_at: str
-
-class UserAddress(BaseModel):
-    id: str
-    address: str
-    city: str
-    state: Optional[str] = None
-    postal_code: str
-    country: str
-
-class OrderItem(BaseModel):
-    product_name: str
-    quantity: int
-    unit_price: float
-    total_price: float
-
-class Order(BaseModel):
-    id: str
-    order_number: str
-    status: str
-    total_amount: float
-    currency: str
-    created_at: str
-    updated_at: str
-    shipped_at: Optional[str] = None
-    delivered_at: Optional[str] = None
-    items: List[OrderItem] = []
-
-class UserProfileResponse(BaseModel):
-    profile: UserProfile
-    addresses: List[UserAddress] = []
-    total_orders: int = 0
-    total_spent: float = 0.0
-
-class OrdersResponse(BaseModel):
-    orders: List[Order]
-    total_count: int
-    page: int = 1
-    limit: int = 10
-
-class HealthResponse(BaseModel):
-    status: str
-    timestamp: str
-    database: str
-    kafka: str
-
 priority_consumer: PriorityConsumer | None = None
 
 
@@ -1835,202 +1776,6 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
         await consumer.stop()
         await websocket.close()
         print(f"✗ WebSocket disconnected: {session_id}")
-
-# Health Check Endpoint
-@app.get("/api/health", response_model=HealthResponse)
-async def health_check():
-    """Check system health status"""
-    try:
-        # Check database connection
-        conn = get_database_connection()
-        db_status = "healthy" if conn else "unhealthy"
-        if conn:
-            conn.close()
-        
-        # Check Kafka producer
-        kafka_status = "healthy" if producer else "unhealthy"
-        
-        return HealthResponse(
-            status="healthy" if db_status == "healthy" and kafka_status == "healthy" else "degraded",
-            timestamp=datetime.utcnow().isoformat(),
-            database=db_status,
-            kafka=kafka_status
-        )
-    except Exception as e:
-        return HealthResponse(
-            status="unhealthy",
-            timestamp=datetime.utcnow().isoformat(),
-            database="error",
-            kafka="error"
-        )
-
-# User Profile Endpoint
-@app.get("/api/user/profile", response_model=UserProfileResponse)
-async def get_user_profile(user_email: str):
-    """Get user profile information including addresses and order stats"""
-    try:
-        # Get user profile
-        user_data = lookup_user_by_email(user_email)
-        if not user_data:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Get user addresses
-        conn = get_database_connection()
-        addresses = []
-        if conn:
-            try:
-                with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                    cursor.execute("""
-                        SELECT id, address, city, state, postal_code, country
-                        FROM user_addresses 
-                        WHERE user_id = %s
-                        ORDER BY created_at DESC
-                    """, (user_data['id'],))
-                    address_rows = cursor.fetchall()
-                    addresses = [dict(addr) for addr in address_rows]
-            except Exception as e:
-                print(f"Error fetching addresses: {e}")
-            finally:
-                conn.close()
-        
-        # Get order statistics
-        orders = lookup_orders_by_email(user_email, limit=1000)  # Get all orders for stats
-        total_orders = len(orders)
-        total_spent = sum(order['total_amount'] for order in orders)
-        
-        # Format user profile
-        profile = UserProfile(
-            id=str(user_data['id']),
-            email=user_data['email'],
-            first_name=user_data.get('first_name'),
-            last_name=user_data.get('last_name'),
-            phone=user_data.get('phone'),
-            created_at=user_data['created_at'].isoformat(),
-            updated_at=user_data['updated_at'].isoformat()
-        )
-        
-        # Format addresses
-        formatted_addresses = [
-            UserAddress(
-                id=str(addr['id']),
-                address=addr['address'],
-                city=addr['city'],
-                state=addr.get('state'),
-                postal_code=addr['postal_code'],
-                country=addr['country']
-            ) for addr in addresses
-        ]
-        
-        return UserProfileResponse(
-            profile=profile,
-            addresses=formatted_addresses,
-            total_orders=total_orders,
-            total_spent=total_spent
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error getting user profile: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-# User Orders Endpoint
-@app.get("/api/user/orders", response_model=OrdersResponse)
-async def get_user_orders(user_email: str, page: int = 1, limit: int = 10):
-    """Get user's orders with pagination"""
-    try:
-        # Validate pagination parameters
-        if page < 1:
-            page = 1
-        if limit < 1 or limit > 100:
-            limit = 10
-        
-        # Get orders
-        orders = lookup_orders_by_email(user_email, limit=1000)  # Get all for pagination
-        total_count = len(orders)
-        
-        # Apply pagination
-        start_idx = (page - 1) * limit
-        end_idx = start_idx + limit
-        paginated_orders = orders[start_idx:end_idx]
-        
-        # Format orders
-        formatted_orders = []
-        for order in paginated_orders:
-            # Format order items
-            order_items = []
-            if order.get('items'):
-                for item in order['items']:
-                    order_items.append(OrderItem(
-                        product_name=item['product_name'],
-                        quantity=item['quantity'],
-                        unit_price=float(item['unit_price']),
-                        total_price=float(item['total_price'])
-                    ))
-            
-            formatted_orders.append(Order(
-                id=str(order['id']),
-                order_number=order['order_number'],
-                status=order['status'],
-                total_amount=float(order['total_amount']),
-                currency=order['currency'],
-                created_at=order['created_at'].isoformat(),
-                updated_at=order['updated_at'].isoformat(),
-                shipped_at=order.get('shipped_at').isoformat() if order.get('shipped_at') else None,
-                delivered_at=order.get('delivered_at').isoformat() if order.get('delivered_at') else None,
-                items=order_items
-            ))
-        
-        return OrdersResponse(
-            orders=formatted_orders,
-            total_count=total_count,
-            page=page,
-            limit=limit
-        )
-        
-    except Exception as e:
-        print(f"Error getting user orders: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-# Order Details Endpoint
-@app.get("/api/orders/{order_number}", response_model=Order)
-async def get_order_details(order_number: str):
-    """Get detailed information about a specific order"""
-    try:
-        order_data = lookup_order_by_number(order_number)
-        if not order_data:
-            raise HTTPException(status_code=404, detail="Order not found")
-        
-        # Format order items
-        order_items = []
-        if order_data.get('items'):
-            for item in order_data['items']:
-                order_items.append(OrderItem(
-                    product_name=item['product_name'],
-                    quantity=item['quantity'],
-                    unit_price=float(item['unit_price']),
-                    total_price=float(item['total_price'])
-                ))
-        
-        return Order(
-            id=str(order_data['id']),
-            order_number=order_data['order_number'],
-            status=order_data['status'],
-            total_amount=float(order_data['total_amount']),
-            currency=order_data['currency'],
-            created_at=order_data['created_at'].isoformat(),
-            updated_at=order_data['updated_at'].isoformat(),
-            shipped_at=order_data.get('shipped_at').isoformat() if order_data.get('shipped_at') else None,
-            delivered_at=order_data.get('delivered_at').isoformat() if order_data.get('delivered_at') else None,
-            items=order_items
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error getting order details: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
 async def orchestrator_consumer():
     """
     Enhanced orchestrator that:

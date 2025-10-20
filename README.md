@@ -6,6 +6,7 @@
 - **Anthropic Claude** as the LLM provider
 - **PostgreSQL** for data persistence
 - **Redis** for session management and caching
+- **Apache Kafka** for event streaming and real-time processing
 
 ### Frontend (please edit as needed)
 - **React 19** with TypeScript
@@ -16,6 +17,7 @@
 ### Infrastructure
 - **Docker** & **Docker Compose** for containerization
 - **Node.js 20** runtime environment
+- **Apache Kafka** with Zookeeper for event streaming
 
 ## Quick Start
 
@@ -45,13 +47,37 @@ SENDGRID_API_KEY=SG.your-sendgrid-api-key-here
 
 ### 3. Backend Setup (Docker)
 ```bash
-# Start backend services (database, redis, and backend API)
-docker-compose up
+# Start all services including Kafka
+docker-compose up -d
+
+# Wait for services to be ready, then setup Kafka topics
+# On Windows:
+.\setup-kafka-topics.ps1
+
+# On Linux/Mac:
+./setup-kafka-topics.sh
 ```
 
 The backend will be available at: http://localhost:8000
 
-### 4. Frontend Setup (Local Development) in a separate terminal
+### 4. Kafka Integration
+The system now includes **Apache Kafka** for event streaming:
+
+**Kafka Topics:**
+- `customer.query_events` - Customer queries and interactions
+- `commerce.order_events` - Order-related events and updates
+- `commerce.order_validation` - Order validation events
+- `customer.policy_queries` - Policy-related queries
+- `policy.order_events` - Policy and order cross-references
+- `agent.responses` - Agent response events
+- `system.events` - System-wide events
+
+**Event Tracking:**
+- Every user interaction gets a `correlation_id` for end-to-end tracking
+- All agent responses are published to Kafka topics
+- Events include priority levels (1=urgent, 2=high, 3=medium, 4=low)
+
+### 5. Frontend Setup (Local Development) in a separate terminal
 
  **Note**: Frontend Docker configuration is currently under development. Please use local development setup.
 
