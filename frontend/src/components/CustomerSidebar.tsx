@@ -17,20 +17,13 @@ import {
 import { Orders } from './Orders';
 import { Profile } from './Profile';
 import { ChatHistory } from './ChatHistory';
-// import { Settings } from './Settings';
+import { Button } from './ui/button';
 import { 
   Package, 
   User, 
   MessageSquare, 
-  History, 
-  Settings as SettingsIcon, 
-  HelpCircle,
-  Bell,
-  Star,
-  FileText,
-  CreditCard,
-  Truck,
-  Shield
+  History,
+  LogOut
 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
 
@@ -40,8 +33,7 @@ interface CustomerSidebarProps {
 
 export function CustomerSidebar({ children }: CustomerSidebarProps) {
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const [notifications, setNotifications] = useState(3);
-  const { userProfile, userOrders } = useUser();
+  const { userProfile, userOrders, logout } = useUser();
 
   const handleTabClick = (tab: string) => {
     setActiveTab(activeTab === tab ? null : tab);
@@ -141,120 +133,15 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
               </SidebarGroupContent>
             </SidebarGroup>
 
-            <SidebarSeparator />
-
-            {/* Support & Services */}
-            <SidebarGroup>
-              <SidebarGroupLabel>Support & Services</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('notifications')}
-                      isActive={activeTab === 'notifications'}
-                      className="w-full justify-start"
-                    >
-                      <Bell className="h-4 w-4" />
-                      Notifications
-                      {notifications > 0 && (
-                        <span className="ml-auto bg-red-500 text-white text-xs rounded-full px-2 py-1">
-                          {notifications}
-                        </span>
-                      )}
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('help')}
-                      isActive={activeTab === 'help'}
-                      className="w-full justify-start"
-                    >
-                      <HelpCircle className="h-4 w-4" />
-                      Help Center
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('settings')}
-                      isActive={activeTab === 'settings'}
-                      className="w-full justify-start"
-                    >
-                      <SettingsIcon className="h-4 w-4" />
-                      Settings
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-
-            <SidebarSeparator />
-
-            {/* Quick Actions */}
-            <SidebarGroup>
-              <SidebarGroupLabel>Quick Actions</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('loyalty')}
-                      isActive={activeTab === 'loyalty'}
-                      className="w-full justify-start"
-                    >
-                      <Star className="h-4 w-4" />
-                      Loyalty Points
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {sidebarStats.loyaltyPoints}
-                      </span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('billing')}
-                      isActive={activeTab === 'billing'}
-                      className="w-full justify-start"
-                    >
-                      <CreditCard className="h-4 w-4" />
-                      Billing
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('shipping')}
-                      isActive={activeTab === 'shipping'}
-                      className="w-full justify-start"
-                    >
-                      <Truck className="h-4 w-4" />
-                      Shipping
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('security')}
-                      isActive={activeTab === 'security'}
-                      className="w-full justify-start"
-                    >
-                      <Shield className="h-4 w-4" />
-                      Security
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
 
             {/* Tab Content */}
             {activeTab === 'orders' && <Orders />}
             {activeTab === 'profile' && <Profile />}
             {activeTab === 'history' && <ChatHistory isOpen={true} onClose={() => setActiveTab(null)} />}
-            {activeTab === 'settings' && <div className="p-4 text-center text-muted-foreground">Settings coming soon...</div>}
           </SidebarContent>
 
           <SidebarFooter className="border-t p-4">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mb-3">
               <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
                 <User className="h-4 w-4 text-primary" />
               </div>
@@ -265,6 +152,15 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
                 </p>
               </div>
             </div>
+            <Button
+              onClick={logout}
+              variant="outline"
+              size="sm"
+              className="w-full"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </Button>
           </SidebarFooter>
         </Sidebar>
 

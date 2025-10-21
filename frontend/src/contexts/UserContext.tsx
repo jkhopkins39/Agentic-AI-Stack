@@ -18,11 +18,16 @@ interface UserContextType {
   profileError: string | null;
   ordersError: string | null;
   
+  // Authentication state
+  isAuthenticated: boolean;
+  
   // Actions
   setCurrentUser: (email: string) => void;
   refreshProfile: () => Promise<void>;
   refreshOrders: () => Promise<void>;
   clearUser: () => void;
+  login: (email: string) => void;
+  logout: () => void;
   
   // Current user email
   currentUserEmail: string | null;
@@ -42,6 +47,7 @@ export function UserProvider({ children }: UserProviderProps) {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   // Load user profile
   const loadUserProfile = async (email: string) => {
@@ -82,6 +88,20 @@ export function UserProvider({ children }: UserProviderProps) {
     loadUserOrders(email);
   };
 
+  // Login user
+  const login = (email: string) => {
+    setIsAuthenticated(true);
+    localStorage.setItem('userEmail', email);
+    setCurrentUser(email);
+  };
+
+  // Logout user
+  const logout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('userEmail');
+    clearUser();
+  };
+
   // Refresh profile data
   const refreshProfile = async () => {
     if (currentUserEmail) {
@@ -105,10 +125,12 @@ export function UserProvider({ children }: UserProviderProps) {
     setOrdersError(null);
   };
 
-  // Auto-load demo user on mount (for testing)
+  // Check for existing authentication on mount
   useEffect(() => {
-    // Set a default demo user for testing
-    setCurrentUser('john.doe@example.com');
+    const savedEmail = localStorage.getItem('userEmail');
+    if (savedEmail) {
+      login(savedEmail);
+    }
   }, []);
 
   const value: UserContextType = {
@@ -118,10 +140,13 @@ export function UserProvider({ children }: UserProviderProps) {
     isLoadingOrders,
     profileError,
     ordersError,
+    isAuthenticated,
     setCurrentUser,
     refreshProfile,
     refreshOrders,
     clearUser,
+    login,
+    logout,
     currentUserEmail,
   };
 
