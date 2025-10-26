@@ -3,6 +3,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Send, Clock, CheckCircle, XCircle, Bot, User } from 'lucide-react';
+import { useUser } from '../contexts/UserContext';
 
 type MessageStatus = 'pending' | 'fulfilled' | 'unfulfilled';
 
@@ -22,6 +23,12 @@ export function Chat() {
   const [sessionId] = useState(() => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { userProfile } = useUser();
+
+  // Get user name for display
+  const userName = userProfile?.profile 
+    ? `${userProfile.profile.first_name || ''} ${userProfile.profile.last_name || ''}`.trim() || userProfile.profile.email
+    : 'User';
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -118,7 +125,8 @@ export function Chat() {
           session_id: sessionId,
           query_text: userInput,
           correlation_id: `corr-${Date.now()}`,
-          event_timestamp: Date.now()
+          event_timestamp: Date.now(),
+          user_email: userProfile?.profile?.email || null
         }),
       });
 
@@ -189,11 +197,11 @@ export function Chat() {
   const getStatusColor = (status: MessageStatus) => {
     switch (status) {
       case 'pending':
-        return 'bg-yellow-100 text-yellow-800';
+        return 'bg-yellow-500/10 text-yellow-600';
       case 'fulfilled':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-500/10 text-green-600';
       case 'unfulfilled':
-        return 'bg-red-100 text-red-800';
+        return 'bg-red-500/10 text-red-600';
     }
   };
 
@@ -210,7 +218,7 @@ export function Chat() {
       <div className="px-4 py-2 border-b bg-muted/50">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-600' : 'bg-red-600'}`} />
             <span className="text-sm text-muted-foreground">
               {isConnected ? 'Connected to Agent Stack' : 'Connecting...'}
             </span>
@@ -224,7 +232,7 @@ export function Chat() {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <Bot className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Welcome to Agent Stack</h3>
+            <h3 className="text-lg font-semibold mb-2">Welcome back, {userName?.split(' ')[0] || 'User'}!</h3>
             <p className="text-muted-foreground mb-4">
               I can help you with orders, policies, general questions, and more!
             </p>

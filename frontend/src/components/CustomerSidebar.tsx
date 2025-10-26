@@ -16,13 +16,11 @@ import {
 } from './ui/sidebar';
 import { Orders } from './Orders';
 import { Profile } from './Profile';
-import { ChatHistory } from './ChatHistory';
 import { Button } from './ui/button';
 import { 
   Package, 
   User, 
-  MessageSquare, 
-  History,
+  MessageSquare,
   LogOut
 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
@@ -112,23 +110,13 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
                       <Package className="h-4 w-4" />
                       Orders
                       {sidebarStats.pendingOrders > 0 && (
-                        <span className="ml-auto bg-orange-500 text-white text-xs rounded-full px-2 py-1">
+                        <span className="ml-auto bg-orange-600 text-white text-xs rounded-full px-2 py-1">
                           {sidebarStats.pendingOrders}
                         </span>
                       )}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
 
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={() => handleTabClick('history')}
-                      isActive={activeTab === 'history'}
-                      className="w-full justify-start"
-                    >
-                      <History className="h-4 w-4" />
-                      Chat History
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -137,7 +125,6 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
             {/* Tab Content */}
             {activeTab === 'orders' && <Orders />}
             {activeTab === 'profile' && <Profile />}
-            {activeTab === 'history' && <ChatHistory isOpen={true} onClose={() => setActiveTab(null)} />}
           </SidebarContent>
 
           <SidebarFooter className="border-t p-4">
@@ -167,16 +154,9 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
         {/* Main Content */}
         <div className="flex-1 flex flex-col">
           <div className="border-b p-4 bg-background">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <SidebarTrigger />
-                <h1 className="text-xl font-semibold">Customer Support Chat</h1>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="text-sm text-muted-foreground">
-                  Welcome back, {userName.split(' ')[0]}!
-                </div>
-              </div>
+            <div className="flex items-center gap-2">
+              <SidebarTrigger />
+              <h1 className="text-xl font-semibold">Capgemini Agent Stack</h1>
             </div>
           </div>
           <div className="flex-1">

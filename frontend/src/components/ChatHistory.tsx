@@ -58,7 +58,7 @@ export function ChatHistory({ isOpen, onClose }: ChatHistoryProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed top-0 right-0 h-full w-80 bg-white border-l border-black shadow-lg z-50 flex flex-col">
+    <div className="fixed top-20 right-0 h-[calc(100vh-5rem)] w-80 bg-white border-l border-gray-200 shadow-lg z-50 flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between mb-4">
@@ -88,18 +88,18 @@ export function ChatHistory({ isOpen, onClose }: ChatHistoryProps) {
             <button
               key={session.id}
               onClick={() => handleChatSelect(session.id)}
-              className="w-full p-3 mb-2 text-left rounded-lg hover:bg-gray-50 transition-colors group"
+              className="w-full p-3 mb-2 text-left rounded-lg hover:bg-muted transition-colors group"
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-sm text-gray-900 truncate">
+                  <h4 className="font-medium text-sm text-foreground truncate">
                     {session.title}
                   </h4>
-                  <p className="text-xs text-gray-500 mt-1 truncate">
+                  <p className="text-xs text-muted-foreground mt-1 truncate">
                     {session.lastMessage}
                   </p>
                 </div>
-                <span className="text-xs text-gray-400 ml-2 flex-shrink-0">
+                <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
                   {formatRelativeTime(session.timestamp)}
                 </span>
               </div>
