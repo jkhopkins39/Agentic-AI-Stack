@@ -1,4 +1,3 @@
-"""Order database operations."""
 from typing import Optional
 from .connection import get_database_connection
 from utils.validation import validate_email, sanitize_input

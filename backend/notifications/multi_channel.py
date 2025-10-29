@@ -1,29 +1,19 @@
-"""Multi-channel notification dispatcher."""
 import os
 from .email_notifications import send_order_receipt_email, send_information_change_email
 from .sms_notifications import send_sms_notification, format_order_receipt_sms
 from .preferences import get_user_notification_preference
 
-# Session email from environment or default
+# Session email from environment or default. Change system email
 DEFAULT_SYSTEM_EMAIL = "support@agenticaistack.com"
 SESSION_EMAIL = os.getenv('USER_EMAIL', DEFAULT_SYSTEM_EMAIL)
 
-
+"""Checks preferences and sends notification via email or SMS. WIP"""
 def send_notification(notification_type: str, content: dict, user_data: dict, delivery_method: str = None) -> bool:
-    """
-    Send notification via email, SMS, or both based on user preference
-    
-    Args:
-        notification_type: Type of notification ('order_receipt', 'info_change', etc.)
-        content: Content data (order_data, changes_made, etc.)
-        user_data: User information including email and phone
-        delivery_method: Override method ('email', 'sms', 'both'), or None to use user preference
-    """
     if not user_data:
         print("No user data provided for notification")
         return False
     
-    # Get user preference if delivery method not specified
+    """Get user preference if delivery method not specified. Will update once SMS is implemented."""
     if not delivery_method and user_data.get('id'):
         preference = get_user_notification_preference(user_data['id'])
         if preference:

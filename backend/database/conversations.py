@@ -1,4 +1,3 @@
-"""Conversation management database operations."""
 import uuid
 import json
 from typing import Optional, Dict, Any, List

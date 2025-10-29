@@ -1,12 +1,11 @@
-"""SMS notification functions."""
 import os
 from twilio.rest import Client
 
-SMS_AVAILABLE = True
+"""Todo: Implement SMS notification w/ twilio"""
+SMS_AVAILABLE = False
 
-
+#Format order data 4 SMS
 def format_order_receipt_sms(order_data: dict) -> str:
-    """Format order data into a concise SMS message"""
     if not order_data:
         return "No order data available."
     
@@ -23,7 +22,7 @@ def format_order_receipt_sms(order_data: dict) -> str:
 
 
 def send_sms_notification(phone_number: str, message_content: str) -> bool:
-    """Send SMS notification using Twilio"""
+    """Todo: Send SMS notification using Twilio"""
     if not SMS_AVAILABLE:
         print(f"SMS not available. Message would have been sent to: {phone_number}")
         print(f"Message content: {message_content}")
@@ -40,6 +39,7 @@ def send_sms_notification(phone_number: str, message_content: str) -> bool:
         print(f"Message content: {message_content}")
         return False
     
+    #creates client with credentials, pass parameters to create message
     try:
         client = Client(account_sid, auth_token)
         message = client.messages.create(

@@ -10,9 +10,8 @@ FAILED_KAFKA_LOG = "logs/failed_kafka_messages.json"
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
 
-
+#Log unclassified queries for model eval & testing
 def log_unclassified_query(query: str, session_id: str, conversation_id: str, attempted_classification: str = None):
-    """Log unclassified queries for evaluation metrics and model improvement"""
     log_entry = {
         "timestamp": datetime.now().isoformat(),
         "session_id": session_id,
@@ -29,10 +28,10 @@ def log_unclassified_query(query: str, session_id: str, conversation_id: str, at
         else:
             logs = []
         
-        # Append new log
+        # Append new
         logs.append(log_entry)
         
-        # Save back to file
+        # Save to JSON file
         with open(UNCLASSIFIED_QUERIES_LOG, 'w') as f:
             json.dump(logs, f, indent=2)
         
@@ -40,9 +39,8 @@ def log_unclassified_query(query: str, session_id: str, conversation_id: str, at
     except Exception as e:
         print(f"Error logging unclassified query: {e}")
 
-
+#Log failed Kafka messages for retry and monitoring
 def log_failed_kafka_message(message: dict, error: str):
-    """Log failed Kafka messages for retry and monitoring"""
     log_entry = {
         "timestamp": datetime.now().isoformat(),
         "message": message,

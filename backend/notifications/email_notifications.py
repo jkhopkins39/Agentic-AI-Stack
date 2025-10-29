@@ -1,9 +1,9 @@
-"""Email notification functions."""
 import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+"""Change default system email"""
 SMTP_AVAILABLE = True
 DEFAULT_SYSTEM_EMAIL = "support@agenticaistack.com"
 

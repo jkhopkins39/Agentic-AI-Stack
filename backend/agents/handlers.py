@@ -1,6 +1,10 @@
-"""Agent handler functions."""
+"""This file contain all agent instantiations and helper functions. Instead of 
+defining all the models, notification helper funcs, and db related funcs in one file,
+we split them into separate files and import."""
 import os
 from langchain.chat_models import init_chat_model
+
+# Used to create stateful agents and parse user messages
 from .models import (
     MessageClassifier,
     UserInformationParser,
@@ -9,6 +13,8 @@ from .models import (
     NotificationPreferenceParser,
     State
 )
+
+# This is new. When main.py is run and a query isn't classified, a log folder populates with the query and attempted classification.
 from utils.logging import log_unclassified_query
 from database import (
     lookup_user_by_email,
@@ -17,6 +23,7 @@ from database import (
     lookup_orders_by_email,
     lookup_orders_by_product_name
 )
+
 from notifications import (
     send_notification,
     format_order_receipt,
@@ -26,7 +33,7 @@ from notifications import (
 )
 from rag import query_rag
 
-# Session configuration
+"Session configuration (We'll change in the future for demonstration)"
 DEFAULT_SYSTEM_EMAIL = "support@agenticaistack.com"
 SESSION_EMAIL = os.getenv('USER_EMAIL', DEFAULT_SYSTEM_EMAIL)
 
@@ -71,7 +78,8 @@ def classify_message(state: State):
     ])
     print(f"CLASSIFIED AS: {result.message_type}")
     
-    # Log general/unclassified messages for evaluation metrics
+    """This is new. When main.py is run and a query isn't classified
+     a log folder populates with the query and attempted classification."""
     if result.message_type == "Message":
         session_id = state.get("session_id", "unknown")
         conversation_id = state.get("conversation_id", "unknown")

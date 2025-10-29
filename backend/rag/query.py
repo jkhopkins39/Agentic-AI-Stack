@@ -1,4 +1,3 @@
-"""RAG query functions."""
 import os
 import shutil
 from langchain.embeddings import OpenAIEmbeddings

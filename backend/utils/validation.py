@@ -1,33 +1,28 @@
-"""Input validation and sanitization functions."""
 import re
 
 # Input validation patterns
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 PHONE_E164_REGEX = re.compile(r'^\+[1-9]\d{1,14}$')
 
-# SQL injection blacklist patterns
+#Basic blacklist, more to come
 SQL_INJECTION_PATTERNS = [
-    r"(\bor\b|\band\b).*[=<>]",  # OR/AND with comparisons
-    r"(union|select|insert|update|delete|drop|create|alter|exec|execute)\s",
-    r"[;'\"\\]",  # Common SQL injection characters
-    r"--",  # SQL comments
-    r"/\*.*\*/",  # SQL block comments
-    r"xp_cmdshell",  # Command execution
-    r"script>",  # XSS attempts
+    r"(\bor\b|\band\b).*[=<>]",  # OR/AND with comparisons // lets an attacker change query logic
+    r"(union|select|insert|update|delete|drop|create|alter|exec|execute)\s", #may be used to extract data or run commands
+    r"[;'\"\\]",  # Common SQL injection characters that may be used to kill queries
+    r"--",  # SQL comments that may be used to bypass filters
+    r"/\*.*\*/",  # ^^^
+    r"xp_cmdshell",  #to run commands
+    r"script>",  # XSS attempts that may be used to inject scripts
 ]
 
 
 def validate_email(email: str) -> tuple[bool, str]:
-    """
-    Validate email address format
-    Returns: (is_valid, error_message)
-    """
     if not email or not isinstance(email, str):
         return False, "Email address is required"
     
     email = email.strip()
     
-    if len(email) > 320:  # RFC 5321
+    if len(email) > 320:  # RFC 5321 max length
         return False, "Email address is too long"
     
     if not EMAIL_REGEX.match(email):
@@ -35,12 +30,8 @@ def validate_email(email: str) -> tuple[bool, str]:
     
     return True, ""
 
-
+#Validate phone number in E.164 format
 def validate_phone(phone: str) -> tuple[bool, str]:
-    """
-    Validate phone number in E.164 format
-    Returns: (is_valid, error_message)
-    """
     if not phone or not isinstance(phone, str):
         return False, "Phone number is required"
     
@@ -51,16 +42,12 @@ def validate_phone(phone: str) -> tuple[bool, str]:
     
     return True, ""
 
-
+#Returns: (sanitized_string, is_potentially_malicious)
 def sanitize_input(input_string: str, max_length: int = 500) -> tuple[str, bool]:
-    """
-    Sanitize user input to prevent SQL injection and XSS attacks
-    Returns: (sanitized_string, is_potentially_malicious)
-    """
     if not input_string:
         return "", False
     
-    # Trim to max length
+    # Trim to max length to prevent DOS attacks
     input_string = input_string[:max_length]
     
     # Check for SQL injection patterns

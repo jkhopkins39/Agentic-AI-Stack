@@ -1,4 +1,5 @@
-"""Pydantic models for structured output parsing."""
+"""This file contains models to instantiate agents as well as state for graph."""
+
 from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict

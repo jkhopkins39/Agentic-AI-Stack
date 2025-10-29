@@ -1,4 +1,3 @@
-"""Document loading, splitting, and storage for RAG system."""
 import os
 import shutil
 import time

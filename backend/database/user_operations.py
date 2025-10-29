@@ -1,6 +1,4 @@
-"""User database operations."""
 from .connection import get_database_connection
-
 
 def lookup_user_by_email(email: str):
     """Look up user by email address"""

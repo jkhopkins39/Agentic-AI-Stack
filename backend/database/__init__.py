@@ -10,6 +10,7 @@ from .conversations import (
     get_conversation_history
 )
 
+"""Export all functions so imports are easily accessed elsewhere"""
 __all__ = [
     'get_database_connection',
     'lookup_user_by_email',

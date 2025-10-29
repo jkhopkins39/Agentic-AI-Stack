@@ -1,4 +1,3 @@
-"""LangGraph configuration and chatbot runner."""
 import uuid
 from langgraph.graph import StateGraph, START, END
 from agents import (

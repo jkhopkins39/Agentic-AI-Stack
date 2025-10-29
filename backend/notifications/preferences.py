@@ -1,4 +1,3 @@
-"""User notification preference management."""
 import uuid
 from typing import Optional, Dict, Any
 from database.connection import get_database_connection
