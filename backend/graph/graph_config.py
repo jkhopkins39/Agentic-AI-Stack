@@ -1,4 +1,6 @@
 import uuid
+import warnings
+import re
 from langgraph.graph import StateGraph, START, END
 from agents import (
     State,
@@ -15,6 +17,9 @@ from database import (
     update_conversation_context,
     save_query_to_conversation
 )
+
+# Suppress LangChain deprecation warnings for cleaner output
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
 
 # Initialize a state graph, then we add nodes, naming them and linking their respective agents
 graph_builder = StateGraph(State)
@@ -59,12 +64,10 @@ graph = graph_builder.compile()
 def run_chatbot():
     """Enhanced chatbot with conversation memory"""
     session_id = str(uuid.uuid4())
-    print(f"Starting conversation w/ session ID: {session_id}")
     
     # Initialize conversation in database
     conversation_id = create_conversation(session_id)
     if not conversation_id:
-        print("Warning: Running in memory-only mode. Agent may not remember past interactions.")
         conversation_id = str(uuid.uuid4())
     
     # Initialize our first state with conversation tracking
@@ -85,11 +88,11 @@ def run_chatbot():
         "needs_follow_up_notification": False
     }
     
-    print("Enhanced chatbot with conversation memory.")
-    print("=" * 50)
+    print("=" * 60)
+    print("AI Assistant - Ready to help!")
     print("I can help you with orders, policies, information changes, and general questions.")
-    print("Press Ctrl + C to exit.")
-    print("-" * 50)
+    print("Type 'exit', 'quit', or 'q' to exit.")
+    print("=" * 60)
 
     while True:
         user_input = input("\nUser: ").strip()
@@ -119,9 +122,42 @@ def run_chatbot():
             # Display the response and save to conversation
             if state.get("messages") and len(state["messages"]) > 0:
                 last_message = state["messages"][-1]
-                if isinstance(last_message, dict) and "content" in last_message:
-                    response_content = last_message["content"]
-                    print(f"Assistant: {response_content}")
+                
+                # Extract content from message (handle both dict and message objects)
+                response_content = None
+                if isinstance(last_message, dict):
+                    response_content = last_message.get("content", "")
+                elif hasattr(last_message, "content"):
+                    # Handle LangChain message objects
+                    content = last_message.content
+                    # If content is itself a string representation of a message object, extract just the text
+                    if isinstance(content, str):
+                        response_content = content
+                    else:
+                        response_content = str(content)
+                else:
+                    response_content = str(last_message)
+                
+                # Clean up the response content
+                if response_content:
+                    # Replace literal \n with actual newlines
+                    response_content = response_content.replace("\\n", "\n")
+                    # Remove any agent prefixes if present
+                    if response_content.startswith(("Message Agent:", "Order Agent:", "Email Agent:", "Policy Agent:")):
+                        if ": " in response_content:
+                            response_content = response_content.split(": ", 1)[1]
+                    
+                    # Ensure we have a clean string (remove any object representation artifacts)
+                    if isinstance(response_content, str):
+                        # Remove any LangChain message object string representations
+                        if "content='" in response_content and "additional_kwargs=" in response_content:
+                            # Extract just the content part from the string representation
+                            match = re.search(r"content='([^']*(?:\\.[^']*)*)'", response_content)
+                            if match:
+                                response_content = match.group(1).replace("\\n", "\n")
+                    
+                    # Print the cleaned response
+                    print(f"\nAssistant:\n{response_content}\n")
                     
                     # Save query and response to database (if available)
                     try:
@@ -143,10 +179,8 @@ def run_chatbot():
                                 state.get("conversation_context", {}).get("user_email")
                             )
                     except Exception as e:
-                        print(f"Could not save to database: {e}")
-                        
-                else:
-                    print(f"Assistant: {last_message}")
+                        # Silently fail database saves to keep output clean
+                        pass
                     
         except Exception as e:
             print(f"Error: {e}")

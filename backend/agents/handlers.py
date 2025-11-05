@@ -2,7 +2,14 @@
 defining all the models, notification helper funcs, and db related funcs in one file,
 we split them into separate files and import."""
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+
+# Ensure environment variables are loaded
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # Used to create stateful agents and parse user messages
 from .models import (
@@ -44,7 +51,7 @@ llm = init_chat_model("anthropic:claude-3-haiku-20240307")
 def classify_message(state: State):
     """Classify incoming message into categories"""
     last_message = state["messages"][-1]
-    print(f"CLASSIFYING MESSAGE: {last_message.content}")
+    # Debug print removed for cleaner output
 
     # Use LangChain method to wrap the base language model to conform with message classifier schema
     classifier_llm = llm.with_structured_output(MessageClassifier)
@@ -76,7 +83,7 @@ def classify_message(state: State):
         },
         {"role": "user", "content": last_message.content}
     ])
-    print(f"CLASSIFIED AS: {result.message_type}")
+    # Debug print removed for cleaner output
     
     """This is new. When main.py is run and a query isn't classified
      a log folder populates with the query and attempted classification."""
@@ -110,7 +117,7 @@ def classify_message(state: State):
             },
             {"role": "user", "content": last_message.content}
         ])
-        print(f"ORDER SUB-TYPE: {sub_type_result.order_sub_type}")
+        # Debug print removed for cleaner output
         return {"message_type": result.message_type, "order_sub_type": sub_type_result.order_sub_type}
     
     return {"message_type": result.message_type}
@@ -163,7 +170,6 @@ def order_agent(state: State):
         }
     ]
     reply = llm.invoke(messages)
-    print(f"Order agent response: {reply.content}")
     
     return {
         "messages": [{"role": "assistant", "content": f"Order Agent: {reply.content}"}]
@@ -192,7 +198,6 @@ def email_agent(state: State):
         }
     ]
     reply = llm.invoke(messages)
-    print(f"Email agent response: {reply.content}")
     return {"messages": [{"role": "assistant", "content": f"Email Agent: {reply.content}"}]}
 
 
@@ -247,8 +252,6 @@ def handle_order_receipt_request(state: State):
         },
         {"role": "user", "content": user_message}
     ])
-    
-    print(f"Parsed receipt request: {parsing_result}")
     
     # Use session email to process the request
     return process_receipt_request(parsing_result.model_dump(), SESSION_EMAIL, conversation_context, state)
@@ -361,7 +364,6 @@ def policy_agent(state: State):
             }
         ]
         reply = llm.invoke(messages)
-        print(f"Policy agent response: {reply.content}")
         return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
         
     except Exception as e:
@@ -379,7 +381,6 @@ def policy_agent(state: State):
             }
         ]
         reply = llm.invoke(messages)
-        print(f"Policy agent response (fallback): {reply.content}")
         return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
 
 
@@ -410,7 +411,6 @@ def message_agent(state: State):
         }
     ]
     reply = llm.invoke(messages)
-    print(f"Message agent response: {reply.content}")
     return {"messages": [{"role": "assistant", "content": f"Message Agent: {reply.content}"}]}
 
 
@@ -451,8 +451,6 @@ def handle_change_information(state: State):
         },
         {"role": "user", "content": user_message}
     ])
-    
-    print(f"Parsed change information: {parsing_result}")
     
     # Use session email to look up the user
     user_data = lookup_user_by_email(SESSION_EMAIL)
@@ -586,8 +584,6 @@ def handle_notification_preference_response(state: State):
         {"role": "user", "content": user_message}
     ])
     
-    print(f"Parsed notification preference: {parsing_result}")
-    
     # Get user data
     user_data = lookup_user_by_email(SESSION_EMAIL)
     
@@ -665,23 +661,39 @@ def orchestrator_agent(state: State):
     
     # Check if information was changed and we need to send a notification email
     if state.get("information_changed") and state.get("needs_email_notification"):
-        print("Orchestrator detected information change - routing to email agent for notification")
-        if last_message.content.startswith(("Message Agent:", "Order Agent:", "Email Agent:", "Policy Agent:")):
-            agent_response = last_message.content
+        # Extract content from message (handle both dict and message objects)
+        message_content = ""
+        if isinstance(last_message, dict):
+            message_content = last_message.get("content", "")
+        elif hasattr(last_message, "content"):
+            message_content = last_message.content
+        else:
+            message_content = str(last_message)
+        
+        if message_content.startswith(("Message Agent:", "Order Agent:", "Email Agent:", "Policy Agent:")):
+            agent_response = message_content
             if ": " in agent_response:
                 clean_response = agent_response.split(": ", 1)[1]
             else:
                 clean_response = agent_response
-            print(f"Orchestrator passing through: {clean_response}")
             
             return {
                 "messages": [{"role": "assistant", "content": clean_response}],
                 "needs_follow_up_email": True
             }
     
+    # Extract content from message (handle both dict and message objects)
+    message_content = ""
+    if isinstance(last_message, dict):
+        message_content = last_message.get("content", "")
+    elif hasattr(last_message, "content"):
+        message_content = last_message.content
+    else:
+        message_content = str(last_message)
+    
     # Check if the last message is from an agent
-    if last_message.content.startswith(("Message Agent:", "Order Agent:", "Email Agent:", "Policy Agent:")):
-        agent_response = last_message.content
+    if message_content.startswith(("Message Agent:", "Order Agent:", "Email Agent:", "Policy Agent:")):
+        agent_response = message_content
         
         # Remove the "Agent:" prefix for cleaner user experience
         if ": " in agent_response:
@@ -689,10 +701,8 @@ def orchestrator_agent(state: State):
         else:
             clean_response = agent_response
         
-        print(f"Orchestrator passing through: {clean_response}")
         return {"messages": [{"role": "assistant", "content": clean_response}]}
     else:
         # Fallback for unexpected cases
-        print(f"Orchestrator fallback response")
         return {"messages": [{"role": "assistant", "content": "I'm here to help you. How can I assist you today?"}]}
 

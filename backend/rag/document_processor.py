@@ -1,11 +1,18 @@
 import os
 import shutil
 import time
+from pathlib import Path
+from dotenv import load_dotenv
 from langchain.document_loaders.pdf import PyPDFDirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.schema import Document
 from langchain.vectorstores.chroma import Chroma
+
+# Ensure environment variables are loaded
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # Data path reads in txt file for policy RAG
 DATA_PATH = os.path.join(os.getcwd())
@@ -16,7 +23,7 @@ def load_documents():
     """Load PDF documents from DATA_PATH"""
     document_loader = PyPDFDirectoryLoader(DATA_PATH)
     documents = document_loader.load()
-    print(f"Loaded {len(documents)} documents from {DATA_PATH}")
+    # Debug print removed for cleaner output
     return documents
 
 
@@ -32,13 +39,7 @@ def split_text(documents: list[Document]):
 
     # Make our list of chunks of text, could handle splitting of multiple documents
     chunks = text_splitter.split_documents(documents)
-    print(f"Split {len(documents)} documents into {len(chunks)} chunks.")
-    
-    if chunks:
-        document = chunks[0]
-        # This is so we can visualize what just happened and what was split and how
-        print(document.page_content)
-        print(document.metadata)
+    # Debug prints removed for cleaner output
 
     return chunks
 
@@ -50,17 +51,24 @@ def save_to_chroma(chunks: list[Document]):
     Args:
         chunks (list[Document]): List of Document objects representing text chunks to save.
     """
+    # Check for OpenAI API key before initializing
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        error_msg = (
+            "Error: OPENAI_API_KEY not found in environment variables. "
+            "Please ensure your .env file contains OPENAI_API_KEY=your_key_here"
+        )
+        print(error_msg)
+        raise ValueError(error_msg)
+    
     # Clear out the existing database directory if it exists
     if os.path.exists(CHROMA_PATH):
-        print(f"Removing existing database at {CHROMA_PATH}")
         shutil.rmtree(CHROMA_PATH)
         time.sleep(1)  # Gives filesystem time to clean up
   
     # Ensure the directory is completely gone
     while os.path.exists(CHROMA_PATH):
         time.sleep(0.5)
-  
-    print(f"Creating new database with {len(chunks)} chunks...")
   
     try:
         # Create a new Chroma database from the documents using OpenAI embeddings
@@ -69,7 +77,7 @@ def save_to_chroma(chunks: list[Document]):
             OpenAIEmbeddings(),
             persist_directory=CHROMA_PATH
         )
-        print(f"Successfully saved {len(chunks)} chunks to {CHROMA_PATH}.")
+        # Debug print removed for cleaner output
     
     except Exception as e:
         print(f"Error creating database: {e}")

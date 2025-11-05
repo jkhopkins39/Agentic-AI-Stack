@@ -1,10 +1,17 @@
 import os
 import shutil
+from pathlib import Path
+from dotenv import load_dotenv
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores.chroma import Chroma
 from langchain.chat_models import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from .document_processor import generate_data_store, CHROMA_PATH
+
+# Ensure environment variables are loaded
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
 PROMPT_TEMPLATE = """
 Answer the question based only on the following context:
@@ -24,23 +31,34 @@ def query_rag(query_text):
     Returns:
         tuple: (formatted_response, response_text)
     """
+    # Check for OpenAI API key before initializing
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        error_msg = (
+            "Error: OPENAI_API_KEY not found in environment variables. "
+            "Please ensure your .env file contains OPENAI_API_KEY=your_key_here"
+        )
+        print(error_msg)
+        return (
+            "I apologize, but I'm currently unable to access the policy information system. "
+            "Please contact support@agenticaistack.com for assistance.",
+            None
+        )
+    
     # YOU MUST - Use same embedding function as before
     embedding_function = OpenAIEmbeddings()
 
     # Check if database exists, if not, generate it
     if not os.path.exists(CHROMA_PATH):
-        print("Database not found. Generating new data store...")
         generate_data_store()
 
     # Prepare the database with error handling
     try:
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
     except Exception as e:
-        print(f"Error loading database: {e}")
-        print("Regenerating database...")
+        # Silently regenerate database on error
         if os.path.exists(CHROMA_PATH):
             shutil.rmtree(CHROMA_PATH)
-        # In case it failed to earlier
         generate_data_store()
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
   
@@ -49,7 +67,6 @@ def query_rag(query_text):
 
     # Enhanced handling for no results or low relevance scores
     if len(results) == 0:
-        print(f"[RAG] No matching results found for query")
         return (
             "I couldn't find specific information about your question in our policy documents. "
             "Could you try rephrasing your question or ask about:\n"
@@ -64,7 +81,6 @@ def query_rag(query_text):
     # Check relevance scores
     best_score = results[0][1]
     if best_score < 0.7:
-        print(f"[RAG] Low relevance score: {best_score:.2f}")
         # Still provide an answer but acknowledge uncertainty
         context_text = "\n\n - -\n\n".join([doc.page_content for doc, _score in results])
         fallback_response = (
@@ -72,7 +88,6 @@ def query_rag(query_text):
             f"Here's what I found:\n\n"
         )
     else:
-        print(f"[RAG] Good relevance score: {best_score:.2f}")
         context_text = "\n\n - -\n\n".join([doc.page_content for doc, _score in results])
         fallback_response = None
  
@@ -80,8 +95,17 @@ def query_rag(query_text):
     prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
     prompt = prompt_template.format(context=context_text, question=query_text)
   
-    # Initialize OpenAI chat model
-    model = ChatOpenAI()
+    # Initialize OpenAI chat model (will use OPENAI_API_KEY from environment)
+    try:
+        model = ChatOpenAI()
+    except Exception as e:
+        error_msg = f"Error initializing OpenAI model: {e}"
+        print(error_msg)
+        return (
+            "I apologize, but I'm currently unable to process your policy question. "
+            "Please contact support@agenticaistack.com for assistance.",
+            None
+        )
 
     # Generate response text based on the prompt
     response_text = model.predict(prompt)
