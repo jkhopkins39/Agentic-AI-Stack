@@ -97,22 +97,41 @@ CREATE TABLE queries (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create email_notifications table for tracking sent emails
-CREATE TABLE email_notifications (
+-- Create notifications table for tracking multi-channel notifications (email and SMS)
+CREATE TABLE notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     correlation_id UUID NOT NULL, -- Links to the originating event
-    recipient_email VARCHAR(255) NOT NULL,
-    email_type VARCHAR(50) NOT NULL, -- order_confirmed, order_shipped, etc.
-    subject VARCHAR(255) NOT NULL,
-    template_id VARCHAR(100), -- SendGrid template ID
+    recipient_email VARCHAR(255), -- Email recipient (optional if SMS only)
+    recipient_phone VARCHAR(20), -- Phone number for SMS (optional if email only)
+    notification_type VARCHAR(50) NOT NULL, -- order_receipt, info_change, order_confirmed, etc.
+    delivery_method VARCHAR(20) NOT NULL, -- 'email', 'sms', or 'both'
+    subject VARCHAR(255), -- Email subject (null for SMS-only)
+    message_content TEXT NOT NULL, -- Email body or SMS text
+    template_id VARCHAR(100), -- SendGrid template ID (for emails)
     template_data JSONB, -- Dynamic data for the template
     sendgrid_message_id VARCHAR(255), -- SendGrid's message ID
-    status VARCHAR(50) DEFAULT 'pending', -- pending, sent, failed, delivered
+    twilio_message_sid VARCHAR(255), -- Twilio's message SID
+    status VARCHAR(50) DEFAULT 'pending', -- pending, sent, failed, delivered, partially_delivered
+    email_status VARCHAR(50), -- Status for email portion (if applicable)
+    sms_status VARCHAR(50), -- Status for SMS portion (if applicable)
     sent_at TIMESTAMPTZ,
     delivered_at TIMESTAMPTZ,
     error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create user_notification_preferences table for storing user notification preferences
+CREATE TABLE user_notification_preferences (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    preferred_method VARCHAR(20) DEFAULT 'email', -- 'email', 'sms', or 'both'
+    receipt_notifications BOOLEAN DEFAULT true, -- Enable receipt notifications
+    info_change_notifications BOOLEAN DEFAULT true, -- Enable info change notifications
+    order_update_notifications BOOLEAN DEFAULT true, -- Enable order status update notifications
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id)
 );
 
 -- Create indexes for performance
@@ -142,9 +161,11 @@ CREATE INDEX idx_queries_correlation_id ON queries(correlation_id);
 CREATE INDEX idx_queries_related_order_id ON queries(related_order_id);
 CREATE INDEX idx_queries_message_order ON queries(message_order);
 CREATE INDEX idx_queries_created_at ON queries(created_at);
-CREATE INDEX idx_email_notifications_correlation_id ON email_notifications(correlation_id);
-CREATE INDEX idx_email_notifications_status ON email_notifications(status);
-CREATE INDEX idx_email_notifications_email_type ON email_notifications(email_type);
+CREATE INDEX idx_notifications_correlation_id ON notifications(correlation_id);
+CREATE INDEX idx_notifications_status ON notifications(status);
+CREATE INDEX idx_notifications_notification_type ON notifications(notification_type);
+CREATE INDEX idx_notifications_delivery_method ON notifications(delivery_method);
+CREATE INDEX idx_user_notification_preferences_user_id ON user_notification_preferences(user_id);
 
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -192,7 +213,10 @@ CREATE TRIGGER update_conversations_updated_at BEFORE UPDATE ON conversations
 CREATE TRIGGER update_queries_updated_at BEFORE UPDATE ON queries 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_email_notifications_updated_at BEFORE UPDATE ON email_notifications 
+CREATE TRIGGER update_notifications_updated_at BEFORE UPDATE ON notifications 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_user_notification_preferences_updated_at BEFORE UPDATE ON user_notification_preferences 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Apply correlation_id population triggers

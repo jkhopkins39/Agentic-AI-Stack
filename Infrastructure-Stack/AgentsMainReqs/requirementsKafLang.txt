@@ -10,8 +10,9 @@ typing-extensions
 kafka-python==2.0.2
 psycopg2-binary==2.9.7
 
-# Optional: SendGrid integration
+# Email and SMS notification services
 sendgrid==6.10.0
+twilio==9.0.0
 
 # Optional: Additional utilities
 requests==2.31.0
