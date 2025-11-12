@@ -2,9 +2,12 @@ import os
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores.chroma import Chroma
-from langchain.chat_models import ChatOpenAI
+#Previously deprecated vvv
+from langchain_community.embeddings import OpenAIEmbeddings
+#Previously deprecated vvv
+from langchain_community.vectorstores import Chroma
+#Previously deprecated vvv
+from langchain_community.chat_models import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from .document_processor import generate_data_store, CHROMA_PATH
 

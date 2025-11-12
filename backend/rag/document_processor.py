@@ -3,11 +3,14 @@ import shutil
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-from langchain.document_loaders.pdf import PyPDFDirectoryLoader
+#Previously deprecated vvv
+from langchain_community.document_loaders.pdf import PyPDFDirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
+#Previously deprecated vvv
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.schema import Document
-from langchain.vectorstores.chroma import Chroma
+#Previously deprecated vvv
+from langchain_community.vectorstores.chroma import Chroma
 
 # Ensure environment variables are loaded
 project_root = Path(__file__).parent.parent.parent

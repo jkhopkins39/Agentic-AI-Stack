@@ -25,6 +25,7 @@ from email.mime.multipart import MIMEMultipart # Additionally used for email ser
 SMTP_AVAILABLE = True
 from typing import Annotated, Literal, Optional, List, Dict, Any # Different data types we need
 from dotenv import load_dotenv # Importing dotenv to get API key from .env file
+from pathlib import Path
 from pydantic import BaseModel, Field # Used for validation and structuring message classification
 from typing_extensions import TypedDict # State typed dict contains typed keys messages, message_type, order_data
 from langchain_community.document_loaders import PyPDFDirectoryLoader
@@ -127,7 +128,10 @@ def generate_data_store():
     chunks = split_text(all_documents) # Split documents into chunks
     save_to_chroma(chunks) # Save the processed data to a data store
 
-load_dotenv()
+# Load .env from project root
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
 
@@ -149,19 +153,17 @@ class PriorityConsumer:
         self.running = False
         
     async def start(self):
-        """Start all priority consumers"""
+        """Start all priority consumers (non-blocking)"""
         self.running = True
         
-        # Start a consumer task for each agent type
-        tasks = [
-            asyncio.create_task(self.run_priority_consumer("Order", order_agent)),
-            asyncio.create_task(self.run_priority_consumer("Email", email_agent)),
-            asyncio.create_task(self.run_priority_consumer("Policy", policy_agent)),
-            asyncio.create_task(self.run_priority_consumer("Message", message_agent)),
-        ]
+        # Start a consumer task for each agent type (run in background, don't await)
+        asyncio.create_task(self.run_priority_consumer("Order", order_agent))
+        asyncio.create_task(self.run_priority_consumer("Email", email_agent))
+        asyncio.create_task(self.run_priority_consumer("Policy", policy_agent))
+        asyncio.create_task(self.run_priority_consumer("Message", message_agent))
         
-        print("🔵 All priority consumers started")
-        await asyncio.gather(*tasks)
+        print("All priority consumers starting in background...")
+        # Don't await - let them run in background so FastAPI can start
         
     async def run_priority_consumer(self, agent_type: str, agent_handler_func):
         """
@@ -182,8 +184,13 @@ class PriorityConsumer:
             )
             await consumer.start()
             
-            # Wait for assignment
+            # Wait for assignment (with timeout to prevent infinite blocking)
+            max_wait_time = 10  # seconds
+            wait_start = time.time()
             while not consumer.assignment():
+                if time.time() - wait_start > max_wait_time:
+                    print(f"⚠ Warning: Timeout waiting for partition assignment for {topic}")
+                    break
                 await asyncio.sleep(0.5)
             
     
@@ -238,7 +245,6 @@ class PriorityConsumer:
                     now = time.time()
                     if now - last_p3_check >= p3_check_interval:
                         last_p3_check = now
-                        print(f"🔍 {agent_type} checking p3...")
                         try:
                             data = await consumers[3].getmany(timeout_ms=50, max_records=1)
                             if data:
@@ -257,43 +263,127 @@ class PriorityConsumer:
                     event_time = event.get("event_timestamp", 0)
                     message_age_ms = time.time() * 1000 - event_time
                     if message_age_ms > 3600000:  # 1 hour = 3,600,000 ms
-                        print(f"⏭️  Skipping old message (age: {message_age_ms/1000:.0f}s)")
+                        print(f"[{agent_type}] Skipping old message (age: {message_age_ms/1000:.0f}s)")
                         await consumers[current_priority].commit()
                         continue  # Skip to next message
                     
                     session_id = event.get("session_id", "unknown")
-                    print(f"→ Consumed {session_id} from {topic}")
+                    query_text = event.get("query_text", "")[:50]
+                    print(f"\n{'='*60}")
+                    print(f" [{agent_type}] Consumed message from {topic}")
+                    print(f"   Session ID: {session_id}")
+                    print(f"   Query: {query_text}")
+                    print(f"   Priority: P{current_priority}")
+                    print(f"{'='*60}\n")
     
                     try:
-                        # Extract state
+                        # Extract state from event
                         state = event.get("state", {})
                         
-                        # Process with agent handler
-                        if asyncio.iscoroutinefunction(agent_handler_func):
-                            result = await agent_handler_func(state)
+                        # Ensure user email is available in state and conversation context
+                        event_user_email = event.get("user_email")
+                        state.setdefault("conversation_context", {})
+                        if event_user_email and not state.get("user_email"):
+                            state["user_email"] = event_user_email
+                        if state.get("user_email") and not state["conversation_context"].get("user_email"):
+                            state["conversation_context"]["user_email"] = state["user_email"]
+                        
+                        # Ensure state has required fields
+                        if "messages" not in state or not state["messages"]:
+                            state["messages"] = [{"role": "user", "content": event.get("query_text", "")}]
+                        if "session_id" not in state:
+                            state["session_id"] = session_id
+                        if "conversation_id" not in state:
+                            state["conversation_id"] = event.get("conversation_id", str(uuid.uuid4()))
+                        if "message_order" not in state:
+                            state["message_order"] = 0
+                        state["message_order"] = state.get("message_order", 0) + 1
+                        
+                        print(f" [{agent_type}] Processing with LangGraph...")
+                        print(f"   State: {list(state.keys())}")
+                        print(f"   User message: {state['messages'][-1].get('content', '')[:50]}...")
+                        
+                        # Process through the full LangGraph pipeline
+                        # This will go through: classifier → router → agent → orchestrator
+                        result = await graph.ainvoke(state)
+                        
+                        # Update state with result
+                        state.update(result)
+                        
+                        # Extract final response from orchestrator (last message)
+                        if state.get("messages") and len(state["messages"]) > 0:
+                            last_message = state["messages"][-1]
+                            
+                            # Extract content from message (handle both dict and message objects)
+                            agent_response = ""
+                            if isinstance(last_message, dict):
+                                agent_response = last_message.get("content", "")
+                            elif hasattr(last_message, "content"):
+                                agent_response = last_message.content
+                            else:
+                                agent_response = str(last_message)
+                            
+                            # Clean up the response content
+                            if agent_response:
+                                # Replace literal \n with actual newlines
+                                agent_response = agent_response.replace("\\n", "\n")
+                                # Remove any agent prefixes if present
+                                if agent_response.startswith(("Message Agent:", "Order Agent:", "Email Agent:", "Policy Agent:", "Orchestrator Agent:")):
+                                    if ": " in agent_response:
+                                        agent_response = agent_response.split(": ", 1)[1]
+                                
+                                # Remove any LangChain message object string representations
+                                if "content='" in agent_response and "additional_kwargs=" in agent_response:
+                                    import re
+                                    match = re.search(r"content='([^']*(?:\\.[^']*)*)'", agent_response)
+                                    if match:
+                                        agent_response = match.group(1).replace("\\n", "\n")
                         else:
-                            result = agent_handler_func(state)
+                            agent_response = "I'm here to help you. How can I assist you today?"
                         
-                        # Extract agent response
-                        last_message = result.get("messages", [{}])[-1]
-                        agent_response = last_message.get("content", "")
+                        print(f"✅ [{agent_type}] LangGraph processed {session_id}")
+                        print(f"   Response length: {len(agent_response)} chars")
+                        print(f"   Response preview: {agent_response[:100]}...")
                         
-                        # Clean agent prefix if present
-                        if ": " in agent_response:
-                            agent_response = agent_response.split(": ", 1)[1]
-                        
-                        print(f"→ {agent_type} agent processed {session_id}")
+                        # Save to database if possible
+                        try:
+                            from database import save_query_to_conversation, update_conversation_context
+                            save_query_to_conversation(
+                                state.get("conversation_id"),
+                                event.get("query_text", ""),
+                                "orchestrator",  # Final response comes from orchestrator
+                                agent_response,
+                                state.get("message_order", 0),
+                                state.get("conversation_context", {}).get("user_id")
+                            )
+                            
+                            # Update conversation context
+                            if state.get("conversation_context"):
+                                update_conversation_context(
+                                    state.get("conversation_id"),
+                                    state.get("conversation_context"),
+                                    state.get("conversation_context", {}).get("user_id"),
+                                    state.get("conversation_context", {}).get("user_email")
+                                )
+                        except Exception as db_error:
+                            print(f" [{agent_type}] Database save failed (non-critical): {db_error}")
                         
                         # Publish response to agent.responses
                         response_event = {
                             "session_id": session_id,
-                            "conversation_id": event.get("conversation_id"),
-                            "agent_type": agent_type.upper() + "_AGENT",
+                            "conversation_id": state.get("conversation_id", event.get("conversation_id")),
+                            "agent_type": "ORCHESTRATOR_AGENT",  # Final response always from orchestrator
                             "message": agent_response,
                             "status": "completed",
                             "priority": current_priority,
-                            "timestamp": int(time.time() * 1000)
+                            "timestamp": int(time.time() * 1000),
+                            "user_email": state.get("user_email"),
                         }
+                        
+                        print(f" [{agent_type}] Publishing response to {RESPONSE_TOPIC}...")
+                        if not producer:
+                            print(f"✗ [{agent_type}] ERROR: Producer is None!")
+                            raise RuntimeError("Kafka producer not initialized")
                         
                         await producer.send_and_wait(
                             RESPONSE_TOPIC,
@@ -301,7 +391,7 @@ class PriorityConsumer:
                             key=session_id
                         )
                         
-                        print(f"→ Published agent response for {session_id}")
+                        print(f"[{agent_type}] Published agent response for {session_id} to {RESPONSE_TOPIC}")
                         
                         # Commit offset after successful processing
                         await consumers[current_priority].commit()
@@ -329,32 +419,53 @@ class PriorityConsumer:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global producer, priority_consumer
+    
+    # Startup
+    try:
+        producer = AIOKafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            key_serializer=lambda v: v.encode("utf-8") if v else None
+        )
+        # Start producer with timeout
+        try:
+            await asyncio.wait_for(producer.start(), timeout=5.0)
+            print("Kafka producer started")
+        except asyncio.TimeoutError:
+            print("Warning: Kafka producer startup timed out")
+            producer = None
+            raise Exception("Kafka producer startup timeout")
         
-        # Startup
-    producer = AIOKafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        key_serializer=lambda v: v.encode("utf-8") if v else None
-    )
-    await producer.start()
-    print("✓ Kafka producer started")
+        # Start orchestrator consumer (non-blocking background task)
+        asyncio.create_task(orchestrator_consumer())
         
-    # Start orchestrator consumer
-    asyncio.create_task(orchestrator_consumer())
+        # Start priority consumers (non-blocking background task)
+        priority_consumer = PriorityConsumer()
+        asyncio.create_task(priority_consumer.start())
         
-    # Start priority consumers
-    priority_consumer = PriorityConsumer()
-    asyncio.create_task(priority_consumer.start())
+        # Give consumers a moment to start, but don't block
+        await asyncio.sleep(0.1)
+    except Exception as e:
+        print(f"Warning: Kafka connection failed: {e}")
+        print("Running in API-only mode (Kafka unavailable)")
+        producer = None
+        priority_consumer = None
         
     yield
         
     # Shutdown
     if priority_consumer:
-        await priority_consumer.stop()
+        try:
+            await priority_consumer.stop()
+        except:
+            pass
         
     if producer:
-        await producer.stop()
-        print("✗ Kafka producer stopped")
+        try:
+            await producer.stop()
+            print("✗ Kafka producer stopped")
+        except:
+            pass
 
 app = FastAPI(lifespan=lifespan)
 
@@ -374,7 +485,7 @@ async def publish_to_kafka(topic: str, priority: int, payload: dict, key: str | 
             key=key  # ✅ Let the serializer handle encoding
         )
     except Exception as e:
-        print(f"❌ Publish error: {e}")
+        print(f"Publish error: {e}")
         raise
 
 
@@ -449,10 +560,14 @@ def query_rag(query_text):
 # formatted_response, response_text = query_rag(query_text)
 # print(response_text)
 
-load_dotenv()
+# Load .env from project root
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
-# Session configuration since we do not have user account tracking set up yet
-SESSION_EMAIL = "jeremyyhop@gmail.com"
+# Session configuration defaults; actual user email should come from authenticated context
+DEFAULT_SESSION_EMAIL = os.getenv("DEFAULT_SESSION_EMAIL", "jeremyyhop@gmail.com")
+SESSION_EMAIL = DEFAULT_SESSION_EMAIL  # Backwards compatibility for modules that still import this
 
 from langchain_anthropic import ChatAnthropic
 llm = ChatAnthropic(model="claude-3-haiku-20240307")
@@ -504,6 +619,22 @@ class State(TypedDict):
     information_changed: bool  # Flag to indicate if user information was changed
     changes_made: list  # List of changes made for email notification
     needs_email_notification: bool  # Flag to trigger email notification
+    user_email: Optional[str]  # Track the authenticated user's email for personalization
+    priority: Optional[int]  # Track routing priority for current message
+    next: Optional[str]  # Control-flow signal for router edges
+
+
+def resolve_user_email(state: State, fallback: Optional[str] = None) -> Optional[str]:
+    """
+    Resolve the current user's email from state, conversation context, or fallback.
+    """
+    conversation_context = state.get("conversation_context") or {}
+    return (
+        state.get("user_email")
+        or conversation_context.get("user_email")
+        or fallback
+        or DEFAULT_SESSION_EMAIL
+    )
 
 def classify_priority(query_text: str, message_type: str, event: dict) -> int:
     """
@@ -625,38 +756,6 @@ async def order_agent(state: State):
     reply = llm.invoke(messages)
     print(f"Order agent response: {reply.content}")
     
-    
-    await publish_to_kafka(
-        "RESPONSE_TOPIC",
-        None,
-        {
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_type": "ORDER_AGENT",
-            "message": reply.content,
-            "order_data": state.get("order_data", {}),
-            "status": "response",
-        },
-        key=session_id,
-    )
-
-    # Publish order event for backend processing (if order data exists)
-    order_data = state.get("order_data", {})
-    if order_data:
-        await publish_to_kafka(
-            "agent.responses",
-            1,  # priority
-            {
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-                "agent_type": "Order",
-                "message": reply.content,
-                "status": "completed",
-                "timestamp": int(time.time() * 1000),
-            },
-            key=session_id,
-        )
-
     return {
         "messages": [{"role": "assistant", "content": f"Order Agent: {reply.content}"}]
     }
@@ -676,11 +775,11 @@ async def email_agent(state: State):
 
     # Branch 1: triggered email notification
     if state.get("needs_email_notification") and state.get("changes_made"):
-        return await handle_information_change_notification(state)
+        return handle_information_change_notification(state)
 
     # Branch 2: order receipt
     if message_type == "Order Receipt":
-        return await handle_order_receipt_request(state)
+        return handle_order_receipt_request(state)
 
     # Default branch: fall back to LLM
     messages = [
@@ -693,20 +792,6 @@ async def email_agent(state: State):
     reply = await llm.ainvoke(messages)
     print(f"Email agent response: {reply.content}")
 
-    await publish_to_kafka(
-        "agent.responses",
-        2,
-        {
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_type": "Email",
-            "message": reply.content,
-            "status": "completed",
-            "timestamp": int(time.time() * 1000),
-        },
-        key=session_id,
-    )
-
     return {
         "messages": [{"role": "assistant", "content": f"Email Agent: {reply.content}"}]
     }
@@ -716,17 +801,18 @@ async def email_agent(state: State):
 def handle_information_change_notification(state: State):
     """Handle sending email notifications for information changes"""
     changes_made = state.get("changes_made", [])
+    user_email = resolve_user_email(state)
     
     if not changes_made:
         return {"messages": [{"role": "assistant", "content": "Email Agent: No changes to notify about."}]}
     
     # Send the information change email
-    email_sent = send_information_change_email(changes_made)
+    email_sent = send_information_change_email(changes_made, recipient_email=user_email or DEFAULT_SESSION_EMAIL)
     
     
     if email_sent:
         # Notify the user the email was sent to the session email
-        response = f"I've sent you a security notification email about the changes made to your account. Please check your email at {SESSION_EMAIL}."
+        response = f"I've sent you a security notification email about the changes made to your account. Please check your email at {user_email or DEFAULT_SESSION_EMAIL}."
     else:
         # If the email fails, notify the user of changes made
         changes_text = ", ".join(changes_made)
@@ -734,7 +820,8 @@ def handle_information_change_notification(state: State):
     
     return {
         "messages": [{"role": "assistant", "content": f"Email Agent: {response}"}],
-        "needs_email_notification": False  # Reset the flag
+        "needs_email_notification": False,  # Reset the flag
+        "user_email": user_email,
     }
 
 """Handle order receipt requests with context memory and multi-turn conversation.
@@ -746,6 +833,7 @@ def handle_order_receipt_request(state: State):
     user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
 
     conversation_context = state.get("conversation_context", {})
+    state_email = resolve_user_email(state, fallback=None)
     
     # Parse the order receipt request
     parser_llm = llm.with_structured_output(OrderReceiptParser)
@@ -772,9 +860,23 @@ def handle_order_receipt_request(state: State):
     ])
     
     print(f"Parsed receipt request: {parsing_result}")
-    
-    # Use session email to process the request
-    return process_receipt_request(parsing_result.model_dump(), SESSION_EMAIL, conversation_context, state)
+
+    parsed_email = (
+        parsing_result.user_email
+        if parsing_result.user_email not in [None, "", "<UNKNOWN>"]
+        else None
+    )
+    user_email = parsed_email or state_email
+
+    if not user_email:
+        response = "I couldn't identify your account to locate orders. Please log in or provide the email associated with your orders."
+        return {
+            "messages": [{"role": "assistant", "content": f"Email Agent: {response}"}],
+            "conversation_context": conversation_context,
+            "user_email": None,
+        }
+
+    return process_receipt_request(parsing_result.model_dump(), user_email, conversation_context, state)
 
 def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
     order_data = None
@@ -815,10 +917,10 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
     
     # If we found an order, send the receipt
     if order_data:
-        email_sent = send_order_receipt_email(order_data)
+        email_sent = send_order_receipt_email(order_data, recipient_email=user_email)
         
         if email_sent:
-            response = f"I've sent the receipt for order {order_data['order_number']} to jeremyyhop@gmail.com."
+            response = f"I've sent the receipt for order {order_data['order_number']} to {user_email}."
         else:
             # Show the receipt upon email failure
             receipt_content = format_order_receipt(order_data)
@@ -826,11 +928,12 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
     
     # Clean up conversation contex
     updated_context = conversation_context.copy()
-    updated_context["user_email"] = SESSION_EMAIL
+    updated_context["user_email"] = user_email
     
     return {
         "messages": [{"role": "assistant", "content": f"Email Agent: {response}"}],
-        "conversation_context": updated_context
+        "conversation_context": updated_context,
+        "user_email": user_email,
     }
 
 
@@ -866,20 +969,6 @@ async def policy_agent(state: State):
 
         reply = await llm.ainvoke(messages)
         print(f"Policy agent response: {reply.content}")
-
-        await publish_to_kafka(
-            "agent.responses",  # actual topic name
-            2,  # priority (1=critical, 2=high, 3=normal)
-            {
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-                "agent_type": "Policy",  # keep naming consistent
-                "message": reply.content,
-                "status": "completed",
-                "timestamp": int(time.time() * 1000),
-            },
-            key=session_id,
-        )
 
         return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
 
@@ -935,20 +1024,6 @@ async def message_agent(state: State):
 
     reply = await llm.ainvoke(messages)
     print(f"Message agent response: {reply.content}")
-
-    await publish_to_kafka(
-        "agent.responses",  # actual topic name
-        2,  # priority (1=critical, 2=high, 3=normal)
-        {
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_type": "Message",  # keep naming consistent
-            "message": reply.content,
-            "status": "completed",
-            "timestamp": int(time.time() * 1000),
-        },
-        key=session_id,
-    )
 
     return {"messages": [{"role": "assistant", "content": f"Message Agent: {reply.content}"}]}
 
@@ -1412,12 +1487,10 @@ def handle_change_information(state: State):
     last_message = state["messages"][-1]
     user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
     conversation_context = state.get("conversation_context", {})
-    
-    # No need for email handling - we use SESSION_EMAIL
-    
+
     # Use LLM to parse the change information request
     parser_llm = llm.with_structured_output(UserInformationParser)
-    
+
     parsing_result = parser_llm.invoke([
         {
             "role": "system",
@@ -1446,89 +1519,101 @@ def handle_change_information(state: State):
         },
         {"role": "user", "content": user_message}
     ])
-    
+
     print(f"Parsed change information: {parsing_result}")
-    
-    # Use session email to look up the user
-    user_data = lookup_user_by_email(SESSION_EMAIL)
-    
-    # Prepare updates based on parsed information
-    updates = {}
-    changes_made = []
-    
-    if parsing_result.new_firstname:
-        updates['first_name'] = parsing_result.new_firstname
-        changes_made.append(f"first name to '{parsing_result.new_firstname}'")
-    
-    if parsing_result.new_lastname:
-        updates['last_name'] = parsing_result.new_lastname
-        changes_made.append(f"last name to '{parsing_result.new_lastname}'")
-    
-    if parsing_result.new_phone:
-        updates['phone'] = parsing_result.new_phone
-        changes_made.append(f"phone number to '{parsing_result.new_phone}'")
-    
-    if parsing_result.new_user_email:
-        updates['email'] = parsing_result.new_user_email
-        changes_made.append(f"email address to '{parsing_result.new_user_email}'")
-    
-    # Check if user exists
-    if not user_data:
-        response = f"I couldn't find your account with email {SESSION_EMAIL}. Please contact customer support for assistance."
+
+    # Determine which email to use for lookup (parsed email > state > default fallback)
+    parsed_email = (
+        parsing_result.current_user_email
+        if parsing_result.current_user_email not in [None, "", "<UNKNOWN>"]
+        else None
+    )
+    user_email = parsed_email or resolve_user_email(state, fallback=None)
+
+    if not user_email:
+        response = "I couldn't identify your account. Please log in and try again so I know which profile to update."
         return {
             "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
             "parsed_changes": parsing_result.model_dump(),
-            "user_data": {}
+            "user_data": {},
         }
-    
+
+    user_data = lookup_user_by_email(user_email)
+
+    # Prepare updates based on parsed information
+    updates = {}
+    changes_made = []
+
+    if parsing_result.new_firstname:
+        updates['first_name'] = parsing_result.new_firstname
+        changes_made.append(f"first name to '{parsing_result.new_firstname}'")
+
+    if parsing_result.new_lastname:
+        updates['last_name'] = parsing_result.new_lastname
+        changes_made.append(f"last name to '{parsing_result.new_lastname}'")
+
+    if parsing_result.new_phone:
+        updates['phone'] = parsing_result.new_phone
+        changes_made.append(f"phone number to '{parsing_result.new_phone}'")
+
+    if parsing_result.new_user_email:
+        updates['email'] = parsing_result.new_user_email
+        changes_made.append(f"email address to '{parsing_result.new_user_email}'")
+
+    # Check if user exists
+    if not user_data:
+        response = f"I couldn't find your account with email {user_email}. Please double-check your login email or contact customer support for assistance."
+        return {
+            "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
+            "parsed_changes": parsing_result.model_dump(),
+            "user_data": {},
+            "user_email": user_email,
+        }
+
     # If no updates identified
     if not updates:
         response = "I understand you want to change your information, but I couldn't identify what specific changes you'd like to make. Could you be more specific about what information you'd like to update?"
         return {
             "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
             "parsed_changes": parsing_result.model_dump(),
-            "user_data": {}
-        }
-    
-    # If we have both updates and user data, proceed with update
-    if user_data:
-        # perform update by passing user id and dictionary of updates to be applied
-        success = update_user_information(user_data['id'], updates)
-        
-        if success:
-            changes_text = ", ".join(changes_made)
-            response = f"Great! I've successfully updated your {changes_text}. Your account information has been updated in our system."
-            
-            # Update conversation context
-            updated_context = conversation_context.copy()
-            updated_context["user_identified"] = True
-            updated_context["user_id"] = user_data['id']
-            updated_context["user_email"] = SESSION_EMAIL
-            
-            # Set flags for email notification
-            information_changed = True
-            needs_email_notification = True
-            
-        else:
-            response = "I apologize, but there was an issue updating your information. Please try again later or contact customer support for assistance."
-            updated_context = conversation_context
-        
-        return {
-            "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
-            "conversation_context": updated_context,
-            "parsed_changes": parsing_result.model_dump(),
             "user_data": user_data,
-            "information_changed": information_changed if 'information_changed' in locals() else False,
-            "changes_made": changes_made,
-            "needs_email_notification": needs_email_notification if 'needs_email_notification' in locals() else False
+            "user_email": user_email,
         }
+
+    # If we have both updates and user data, proceed with update
+    success = update_user_information(user_data['id'], updates)
+
+    if success:
+        changes_text = ", ".join(changes_made)
+        response = f"Great! I've successfully updated your {changes_text}. Your account information has been updated in our system."
+
+        # Update conversation context
+        updated_context = conversation_context.copy()
+        updated_context["user_identified"] = True
+        updated_context["user_id"] = user_data['id']
+        updated_email = parsing_result.new_user_email or user_email
+        updated_context["user_email"] = updated_email
+
+        # Set flags for email notification
+        information_changed = True
+        needs_email_notification = True
     else:
-        response = "I couldn't find your account with that email address. Please double-check your email and try again, or contact customer support for assistance."
-        return {
-            "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
-            "parsed_changes": parsing_result.model_dump(),
-            "user_data": {}
-        }
+        response = "I apologize, but there was an issue updating your information. Please try again later or contact customer support for assistance."
+        updated_context = conversation_context
+        updated_email = user_email
+        information_changed = False
+        needs_email_notification = False
+
+    return {
+        "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
+        "conversation_context": updated_context,
+        "parsed_changes": parsing_result.model_dump(),
+        "user_data": user_data,
+        "information_changed": information_changed,
+        "changes_made": changes_made,
+        "needs_email_notification": needs_email_notification,
+        "user_email": updated_email,
+    }
 
 # Handle order receipt requests
 def handle_order_receipt(state: State):
@@ -1604,6 +1689,7 @@ app.add_middleware(
 class IngressMessage(BaseModel):
     session_id: str
     user_id: Optional[str] = None
+    user_email: Optional[str] = None
     query_text: str
     correlation_id: Optional[str] = None
     event_timestamp: Optional[int] = None
@@ -1627,6 +1713,13 @@ producer: AIOKafkaProducer | None = None
 @app.post("/publish/ingress")
 async def publish_to_ingress(message: IngressMessage):
     """Publish message from frontend to system.ingress topic"""
+    print(f"\n{'='*60}")
+    print(f"📥 [INGRESS] Received message from frontend")
+    print(f"   Session ID: {message.session_id}")
+    print(f"   Query: {message.query_text[:100]}")
+    print(f"   User Email: {message.user_email}")
+    print(f"{'='*60}\n")
+    
     if not message.event_timestamp:
         message.event_timestamp = int(time.time() * 1000)
     if not message.correlation_id:
@@ -1635,6 +1728,7 @@ async def publish_to_ingress(message: IngressMessage):
     kafka_message = {
         "session_id": message.session_id,
         "user_id": message.user_id,
+        "user_email": message.user_email,
         "query_text": message.query_text,
         "correlation_id": message.correlation_id,
         "event_timestamp": message.event_timestamp,
@@ -1642,57 +1736,83 @@ async def publish_to_ingress(message: IngressMessage):
         "status": "pending"
     }
     
+    if not producer:
+        print("ERROR: Producer is None! Cannot publish ingress message")
+        raise HTTPException(status_code=503, detail="Kafka producer not initialized")
+    
     try:
+        print(f"[INGRESS] Publishing to Kafka topic: {INGRESS_TOPIC}")
         await producer.send_and_wait(
             INGRESS_TOPIC,
             value=kafka_message,
             key=message.session_id
         )
         
-        print(f"→ Published ingress for {message.session_id}")
+        print(f"[INGRESS] Successfully published to {INGRESS_TOPIC} for session {message.session_id}")
         return {"success": True, "message": f"Published to {INGRESS_TOPIC}"}
     except Exception as e:
-        print(f"✗ Publish error: {e}")
+        print(f"[INGRESS] Publish error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws/agent-responses/{session_id}")
 async def websocket_agent_responses(websocket: WebSocket, session_id: str):
     await websocket.accept()
-    print(f"✓ WebSocket connected: {session_id}")
+    print(f"\n{'='*60}")
+    print(f" [WEBSOCKET] Connected: {session_id}")
+    print(f" Listening on topic: {RESPONSE_TOPIC}")
+    print(f"{'='*60}\n")
     
     consumer = AIOKafkaConsumer(
         RESPONSE_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id=f"ws-{session_id}",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        auto_offset_reset="latest",  # ✅ Change back to latest
+        auto_offset_reset="latest",  #  Change back to latest
         enable_auto_commit=True,
         session_timeout_ms=6000,
         request_timeout_ms=30000
     )
     
     await consumer.start()
+    print(f"[WEBSOCKET] Consumer started for {session_id}")
     
-    # ✅ Add timestamp filter here too
+    # Add timestamp filter here too
     try:
+        message_count = 0
         async for message in consumer:
+            message_count += 1
             event = message.value
+            
+            print(f" [WEBSOCKET] Received message #{message_count} from {RESPONSE_TOPIC}")
+            print(f"   Event session_id: {event.get('session_id')}")
+            print(f"   Expected session_id: {session_id}")
+            print(f"   Agent type: {event.get('agent_type')}")
             
             # Only send messages from the last 10 seconds (prevents old duplicates)
             event_time = event.get("timestamp", 0)
-            if time.time() * 1000 - event_time > 10000:
+            age_ms = time.time() * 1000 - event_time
+            if age_ms > 10000:
+                print(f"⏭  [WEBSOCKET] Skipping old message (age: {age_ms/1000:.1f}s)")
                 continue
                 
             if event.get("session_id") == session_id:
+                print(f" [WEBSOCKET] Sending to frontend: {session_id}")
+                print(f"   Message: {event.get('message', '')[:100]}...")
                 await websocket.send_json(event)
-                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+                print(f" [WEBSOCKET] Successfully sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+            else:
+                print(f" [WEBSOCKET] Session ID mismatch, skipping")
     except Exception as e:
-        print(f"✗ WebSocket consumer error: {e}")
+        print(f"✗ [WEBSOCKET] Consumer error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         await consumer.stop()
         await websocket.close()
-        print(f"✗ WebSocket disconnected: {session_id}")
+        print(f" [WEBSOCKET] Disconnected: {session_id}")
 
 # Authentication Endpoint
 @app.post("/api/auth/login", response_model=LoginResponse)
@@ -1790,30 +1910,71 @@ async def orchestrator_consumer():
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id="orchestrator-group-v2",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        auto_offset_reset="earliest"
+        auto_offset_reset="latest",  # Only process new messages
+        enable_auto_commit=True,
+        session_timeout_ms=30000,
+        request_timeout_ms=30000
     )
     
     await consumer.start()
     print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
 
-# Wait for partition assignment
+    # Wait for partition assignment (with timeout) - but don't block forever
+    max_wait_time = 20  # seconds
+    wait_start = time.time()
+    assigned = False
     while not consumer.assignment():
-        print("⏳ Waiting for partition assignment...")
+        if time.time() - wait_start > max_wait_time:
+            print("Warning: Timeout waiting for orchestrator partition assignment")
+            print(f"   Consumer subscription: {consumer.subscription()}")
+            print("   Continuing anyway - consumer will get assignment eventually...")
+            break
+        if int(time.time() - wait_start) % 3 == 0:  # Print every 3 seconds
+            print(f"⏳ Waiting for partition assignment... ({int(time.time() - wait_start)}s)")
         await asyncio.sleep(0.5)
+    else:
+        assigned = True
 
-    print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
+    # Check assignment status
+    assignment = consumer.assignment()
+    if assignment:
+        print(f"Orchestrator assigned partitions: {assignment}")
+    else:
+        print("⚠ Warning: No partition assignment yet, but starting consumer loop anyway...")
+        print(f"   Subscription: {consumer.subscription()}")
 
-    print(f"🔍 Orchestrator ENTERING async for loop")
+    print(f"Orchestrator ENTERING async for loop")
     try:
+        print("   Starting to iterate over consumer messages...")
+        message_count = 0
+        # The async for loop will block until messages arrive, which is expected
         async for message in consumer:
-            print(f"⚡ LOOP ITERATION - got message from partition {message.partition}")  # ADD THIS
-            print(f"🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
-            event = message.value
-            session_id = event.get("session_id", "unknown")
-            print(f"→ Orchestrator received event for {session_id}")
+            message_count += 1
+            try:
+                print(f" LOOP ITERATION #{message_count} - got message from partition {message.partition}, offset {message.offset}")
+                print(f" ORCHESTRATOR GOT MESSAGE!")
+                event = message.value
+                if not event:
+                    print(" Warning: Received None event, skipping")
+                    continue
+                session_id = event.get("session_id", "unknown")
+                print(f" Orchestrator received event for {session_id}: {event.get('query_text', '')[:50]}")
+            except Exception as e:
+                print(f" Error processing message in orchestrator loop: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
             
             try:
-                # Build state from event
+                # Build state from event - prepare for LangGraph processing
+                # The state will be processed through the full LangGraph pipeline
+                user_email = event.get("user_email")
+                conversation_context = {
+                    **(event.get("conversation_context") or {}),
+                }
+                if user_email:
+                    conversation_context["user_email"] = user_email
+
                 state = {
                     "messages": [{"role": "user", "content": event.get("query_text", "")}],
                     "message_type": None,
@@ -1822,20 +1983,24 @@ async def orchestrator_consumer():
                     "parsed_changes": {},
                     "conversation_id": event.get("conversation_id", str(uuid.uuid4())),
                     "session_id": session_id,
-                    "conversation_context": {},
+                    "conversation_context": conversation_context,
                     "message_order": 0,
                     "information_changed": False,
                     "changes_made": [],
                     "needs_email_notification": False,
                     "needs_follow_up_email": False,
-                    "next": None
+                    "needs_follow_up_notification": False,
+                    "notification_preference": None,
+                    "next": None,
+                    "user_email": user_email,
                 }
                 
-                # Classify message type (your existing classify_message function)
-                classification = classify_message(state)
-                state.update(classification)
-                
-                message_type = state.get("message_type", "Message")
+                # Note: We don't classify here anymore - the LangGraph will do it
+                # through classifier → router → agent → orchestrator
+                # But we still need message_type for routing to priority topics
+                temp_state = state.copy()
+                classification = classify_message(temp_state)
+                message_type = classification.get("message_type", "Message")
                 
                 # Classify priority
                 priority = classify_priority(
@@ -1849,6 +2014,11 @@ async def orchestrator_consumer():
                 priority_topics = PRIORITY_TOPICS.get(topic_key, PRIORITY_TOPICS["Message"])
                 target_topic = priority_topics[priority - 1]  # priority 1->p1, 2->p2, 3->p3
                 
+                print(f" [ORCHESTRATOR] Routing decision:")
+                print(f"   Message Type: {message_type}")
+                print(f"   Priority: P{priority}")
+                print(f"   Target Topic: {target_topic}")
+                
                 # Create routing event
                 routing_event = {
                     "session_id": session_id,
@@ -1858,20 +2028,28 @@ async def orchestrator_consumer():
                     "query_text": event.get("query_text", ""),
                     "state": state,
                     "correlation_id": event.get("correlation_id"),
-                    "event_timestamp": event.get("event_timestamp", int(time.time() * 1000))
+                    "event_timestamp": event.get("event_timestamp", int(time.time() * 1000)),
+                    "user_email": user_email,
                 }
                 
                 # Publish to priority topic
+                if not producer:
+                    print(f"✗ [ORCHESTRATOR] ERROR: Producer is None! Cannot route {session_id}")
+                    raise RuntimeError("Kafka producer not initialized")
+                
+                print(f" [ORCHESTRATOR] Publishing to {target_topic}...")
                 await producer.send_and_wait(
                     target_topic,
                     value=routing_event,
                     key=session_id
                 )
                 
-                print(f"→ Routed {session_id} to {target_topic} (type: {message_type}, priority: P{priority})")
+                print(f" [ORCHESTRATOR] Routed {session_id} to {target_topic} (type: {message_type}, priority: P{priority})")
                 
             except Exception as e:
                 print(f"✗ Orchestrator error for {session_id}: {e}")
+                import traceback
+                traceback.print_exc()
                 
     finally:
         await consumer.stop()

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
-import { Send, Clock, CheckCircle, XCircle, Bot, User } from 'lucide-react';
+import { Send, Clock, CheckCircle, XCircle, Bot, User, Loader2 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
 
 type MessageStatus = 'pending' | 'fulfilled' | 'unfulfilled';
@@ -14,6 +14,7 @@ interface Message {
   timestamp: Date;
   isUser: boolean;
   agentType?: string;
+  isTyping?: boolean;
 }
 
 export function Chat() {
@@ -46,40 +47,55 @@ export function Chat() {
         const ws = new WebSocket(`ws://localhost:8000/ws/agent-responses/${sessionId}`);
         
         ws.onopen = () => {
-          console.log('WebSocket connected');
+          console.log('🔌 [FRONTEND] WebSocket connected', { sessionId });
           setIsConnected(true);
         };
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log('Received WebSocket message:', data);
+            console.log(' [FRONTEND] Received WebSocket message:', {
+              sessionId: data.session_id,
+              agentType: data.agent_type,
+              messageLength: data.message?.length,
+              timestamp: data.timestamp,
+              fullData: data
+            });
             
-            // Add agent response to messages
-            const agentMessage: Message = {
-              id: `agent-${Date.now()}`,
-              content: data.message || 'Response received',
-              status: 'fulfilled',
-              timestamp: new Date(),
-              isUser: false,
-              agentType: data.agent_type || 'Agent'
-            };
+            // Remove "Processing..." placeholder message when we get actual response
+            setMessages(prev => {
+              // Filter out "Processing..." messages
+              const filtered = prev.filter(msg => 
+                !(msg.isTyping && !msg.isUser)
+              );
+              
+              // Add agent response to messages
+              const agentMessage: Message = {
+                id: `agent-${Date.now()}`,
+                content: data.message || 'Response received',
+                status: 'fulfilled',
+                timestamp: new Date(),
+                isUser: false,
+                agentType: data.agent_type || 'Agent'
+              };
 
-            setMessages(prev => [...prev, agentMessage]);
+              console.log(' [FRONTEND] Adding message to UI:', agentMessage);
+              return [...filtered, agentMessage];
+            });
           } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            console.error(' [FRONTEND] Error parsing WebSocket message:', error, event.data);
           }
         };
 
         ws.onclose = () => {
-          console.log('WebSocket disconnected');
+          console.log(' [FRONTEND] WebSocket disconnected', { sessionId });
           setIsConnected(false);
           // Attempt to reconnect after 3 seconds
           setTimeout(connectWebSocket, 3000);
         };
 
         ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
+          console.error(' [FRONTEND] WebSocket error:', error, { sessionId });
           setIsConnected(false);
         };
 
@@ -115,27 +131,42 @@ export function Chat() {
     setInputValue('');
 
     try {
+      const requestPayload = { 
+        session_id: sessionId,
+        query_text: userInput,
+        correlation_id: `corr-${Date.now()}`,
+        event_timestamp: Date.now(),
+        user_email: userProfile?.profile?.email || null
+      };
+      
+      console.log(' [FRONTEND] Sending message to backend:', {
+        sessionId,
+        queryText: userInput,
+        userEmail: userProfile?.profile?.email,
+        payload: requestPayload
+      });
+      
       // Send message to Kafka via the ingress endpoint
       const response = await fetch('http://localhost:8000/publish/ingress', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          session_id: sessionId,
-          query_text: userInput,
-          correlation_id: `corr-${Date.now()}`,
-          event_timestamp: Date.now(),
-          user_email: userProfile?.profile?.email || null
-        }),
+        body: JSON.stringify(requestPayload),
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(' [FRONTEND] HTTP error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText
+        });
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Message published to Kafka:', data);
+      console.log(' [FRONTEND] Message published to Kafka:', data);
       
       // Update user message status to fulfilled (message was sent successfully)
       setMessages(prev => 
@@ -150,10 +181,11 @@ export function Chat() {
       // Add a placeholder message indicating we're waiting for response
       const waitingMessage: Message = {
         id: `waiting-${Date.now()}`,
-        content: 'Processing your request...',
+        content: '',
         status: 'pending',
         timestamp: new Date(),
-        isUser: false
+        isUser: false,
+        isTyping: true
       };
 
       setMessages(prev => [...prev, waitingMessage]);
@@ -205,12 +237,8 @@ export function Chat() {
     }
   };
 
-  // Remove waiting messages when we get actual responses
-  useEffect(() => {
-    setMessages(prev => 
-      prev.filter(msg => !(msg.content === 'Processing your request...' && msg.status === 'pending'))
-    );
-  }, [messages]);
+  // Note: "Processing..." messages are now removed when WebSocket receives actual response
+  // This prevents infinite loop issues
 
   return (
     <div className="flex flex-col h-full">
@@ -265,7 +293,14 @@ export function Chat() {
                   </span>
                 </div>
               )}
-              <p className="mb-2 whitespace-pre-wrap">{message.content}</p>
+              {message.isTyping ? (
+                <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Thinking...</span>
+                </div>
+              ) : (
+                <p className="mb-2 whitespace-pre-wrap">{message.content}</p>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-xs opacity-70">
                   {message.timestamp.toLocaleTimeString()}
