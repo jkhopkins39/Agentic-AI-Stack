@@ -11,14 +11,28 @@ from typing import Annotated, Literal, Optional, List, Dict, Any # Different dat
 from dotenv import load_dotenv # Importing dotenv to get API key from .env file
 from pydantic import BaseModel, Field # Used for validation and structuring message classification
 from typing_extensions import TypedDict # State typed dict contains typed keys messages, message_type, order_data
-from langchain.document_loaders.pdf import PyPDFDirectoryLoader # Importing PDF loader from Langchain
-from langchain.text_splitter import RecursiveCharacterTextSplitter # Importing text splitter from Langchain
-from langchain.embeddings import OpenAIEmbeddings # Importing OpenAI embeddings from Langchain
-from langchain.schema import Document # Importing Document schema from Langchain
-from langchain_core.prompts import ChatPromptTemplate # Importing ChatPromptTemplate for prompt formatting
-from langchain.vectorstores.chroma import Chroma # Importing Chroma vector store from Langchain
-from langchain.chat_models import ChatOpenAI # Import OpenAI LLM
-from langchain.chat_models import init_chat_model # Initialization using whatever chatbot API you're using
+# Document loading (PDFs, directories, etc.)
+from langchain_community.document_loaders import PyPDFDirectoryLoader  # PDF loader from LangChain Community
+from langchain_anthropic import ChatAnthropic  # Modern import for Anthropic LLM
+# Text splitting utilities
+from langchain_text_splitters import RecursiveCharacterTextSplitter  # Modern text splitter
+
+# Embeddings (OpenAI or other providers)
+from langchain_community.embeddings import OpenAIEmbeddings  # OpenAI embeddings via LangChain Community
+
+# Core data structures
+from langchain_core.documents import Document  # Document schema from LangChain Core
+
+# Prompt templates and prompt formatting
+from langchain_core.prompts import ChatPromptTemplate  # Chat prompt builder
+
+# Vector store integration (Chroma)
+from langchain_community.vectorstores import Chroma  # Chroma vector store from LangChain Community
+
+# Chat model initialization (OpenAI, Anthropic, etc.)
+from langchain_openai import ChatOpenAI  # Modern import for OpenAI LLM
+from langchain_openai import ChatOpenAI
+
 from langgraph.graph import StateGraph, START, END # These are nodes in graph
 from langgraph.graph.message import add_messages # Messages between nodes
 from IPython.display import Image, display # This is for displaying the graph visualization
@@ -193,7 +207,7 @@ load_dotenv()
 SESSION_EMAIL = "jeremyyhop@gmail.com"
 
 #Load Haiku, a more lightweight and fast model from Anthropic
-llm = init_chat_model("anthropic:claude-3-haiku-20240307")
+llm = ChatAnthropic(model="claude-3-haiku-20240307")
 
 # Load ChatGPT 4o Mini
 #llm = init_chat_model("openai:gpt-4o-mini")
