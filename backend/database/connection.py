@@ -14,12 +14,13 @@ def get_database_connection():
             conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
         else:
             # Use individual environment variables for local development
+            # Defaults match AgenticAIStackDB from Infrastructure-Stack
             conn = psycopg2.connect(
                 host=os.getenv('DB_HOST', 'localhost'),
                 port=os.getenv('DB_PORT', '5432'),
-                database=os.getenv('DB_NAME', 'agent_system'),
-                user=os.getenv('DB_USER', 'postgres'),
-                password=os.getenv('DB_PASSWORD', 'password123'),  # Default to docker-compose password
+                database=os.getenv('DB_NAME', 'AgenticAIStackDB'),
+                user=os.getenv('DB_USER', 'AgenticAIStackDB'),
+                password=os.getenv('DB_PASSWORD', '8%w=r?D52Eo2EwcVW:'),  # Default to AgenticAIStackDB password
                 cursor_factory=RealDictCursor
             )
         return conn
