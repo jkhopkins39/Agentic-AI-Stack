@@ -51,6 +51,26 @@ export function UserProvider({ children }: UserProviderProps) {
 
   // Load user profile
   const loadUserProfile = async (email: string) => {
+    // Handle guest login - skip profile loading
+    if (email === 'guest@example.com') {
+      setUserProfile({
+        profile: {
+          id: 'guest',
+          email: 'guest@example.com',
+          first_name: 'Guest',
+          last_name: 'User',
+          phone: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        },
+        addresses: [],
+        total_orders: 0,
+        total_spent: 0
+      });
+      setIsLoadingProfile(false);
+      return;
+    }
+    
     setIsLoadingProfile(true);
     setProfileError(null);
     
@@ -60,6 +80,23 @@ export function UserProvider({ children }: UserProviderProps) {
     } catch (error) {
       console.error('Error loading user profile:', error);
       setProfileError(error instanceof Error ? error.message : 'Failed to load profile');
+      // For guest or invalid users, set a minimal profile
+      if (email === 'guest@example.com' || error instanceof Error && error.message.includes('404')) {
+        setUserProfile({
+          profile: {
+            id: 'guest',
+            email: email,
+            first_name: 'Guest',
+            last_name: 'User',
+            phone: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          },
+          addresses: [],
+          total_orders: 0,
+          total_spent: 0
+        });
+      }
     } finally {
       setIsLoadingProfile(false);
     }
@@ -67,6 +104,18 @@ export function UserProvider({ children }: UserProviderProps) {
 
   // Load user orders
   const loadUserOrders = async (email: string) => {
+    // Handle guest login - skip orders loading
+    if (email === 'guest@example.com') {
+      setUserOrders({
+        orders: [],
+        total_count: 0,
+        page: 1,
+        limit: 10
+      });
+      setIsLoadingOrders(false);
+      return;
+    }
+    
     setIsLoadingOrders(true);
     setOrdersError(null);
     
@@ -76,6 +125,15 @@ export function UserProvider({ children }: UserProviderProps) {
     } catch (error) {
       console.error('Error loading user orders:', error);
       setOrdersError(error instanceof Error ? error.message : 'Failed to load orders');
+      // For guest users, set empty orders
+      if (email === 'guest@example.com') {
+        setUserOrders({
+          orders: [],
+          total_count: 0,
+          page: 1,
+          limit: 10
+        });
+      }
     } finally {
       setIsLoadingOrders(false);
     }
@@ -90,6 +148,8 @@ export function UserProvider({ children }: UserProviderProps) {
 
   // Login user
   const login = (email: string) => {
+    // Clear previous user data first
+    clearUser();
     setIsAuthenticated(true);
     localStorage.setItem('userEmail', email);
     setCurrentUser(email);

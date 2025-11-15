@@ -4,7 +4,7 @@ import { Input } from './ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { Alert, AlertDescription } from './ui/alert';
-import { Loader2, Mail, Lock, MessageSquare } from 'lucide-react';
+import { Loader2, Mail, Lock, MessageSquare, User, Copy, Check } from 'lucide-react';
 
 interface LoginProps {
   onLogin: (email: string) => void;
@@ -15,6 +15,7 @@ export function Login({ onLogin }: LoginProps) {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +43,22 @@ export function Login({ onLogin }: LoginProps) {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleGuestLogin = () => {
+    // Guest login - no authentication required
+    onLogin('guest@example.com');
+  };
+
+  const handleAdminQuickLogin = () => {
+    setEmail('admin@example.com');
+    setPassword('\\\/LewdBPj4J/8KzKz2K');
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -121,14 +138,75 @@ export function Login({ onLogin }: LoginProps) {
               </Button>
             </form>
 
-            {/* Demo Credentials */}
-            {/* <div className="mt-4 text-center">
-              <p className="text-sm text-gray-600 mb-2">Demo credentials:</p>
-              <div className="bg-gray-50 border border-gray-200 p-3 rounded-lg">
-                <div className="text-sm font-mono text-gray-800">john.doe@example.com</div>
-                <div className="text-sm font-mono text-gray-800">hashed_password_123</div>
+            {/* Guest Login Button */}
+            <div className="mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleGuestLogin}
+                className="w-full h-10 text-base border-gray-300"
+              >
+                <User className="mr-2 h-4 w-4" />
+                Continue as Guest
+              </Button>
+            </div>
+
+            {/* Admin Credentials */}
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <p className="text-xs text-gray-500 mb-2 text-center">Admin Credentials</p>
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-gray-500 mb-1">Email:</p>
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs font-mono text-gray-800 break-all">admin@example.com</code>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={() => copyToClipboard('admin@example.com')}
+                        title="Copy email"
+                      >
+                        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleAdminQuickLogin}
+                    className="ml-2 text-xs"
+                  >
+                    Fill
+                  </Button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-gray-500 mb-1">Password:</p>
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs font-mono text-gray-800 break-all">\\\/LewdBPj4J/8KzKz2K</code>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={() => copyToClipboard('\\\/LewdBPj4J/8KzKz2K')}
+                        title="Copy password"
+                      >
+                        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleAdminQuickLogin}
+                    className="ml-2 text-xs"
+                  >
+                    Fill
+                  </Button>
+                </div>
               </div>
-            </div> */}
+            </div>
           </div>
         </div>
       </div>

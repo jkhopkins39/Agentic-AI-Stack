@@ -6,10 +6,12 @@ import { Separator } from './ui/separator';
 
 interface Session {
   conversation_id: string;
-  user_id: string;
-  email: string;
-  first_name: string;
-  last_name: string;
+  user_id: string | null;
+  user_email: string | null;
+  email?: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -82,19 +84,36 @@ const AdminDashboard: React.FC = () => {
     try {
       if (activeTab === 'overview') {
         const response = await fetch('http://localhost:8000/api/admin/stats');
+        if (!response.ok) {
+          throw new Error('Failed to fetch stats');
+        }
         const data = await response.json();
         setStats(data);
       } else if (activeTab === 'sessions') {
         const response = await fetch('http://localhost:8000/api/admin/sessions');
+        if (!response.ok) {
+          throw new Error('Failed to fetch sessions');
+        }
         const data = await response.json();
-        setSessions(data.sessions);
+        setSessions(data.sessions || []);
       } else if (activeTab === 'users') {
         const response = await fetch('http://localhost:8000/api/admin/users');
+        if (!response.ok) {
+          throw new Error('Failed to fetch users');
+        }
         const data = await response.json();
-        setUsers(data.users);
+        setUsers(data.users || []);
       }
     } catch (error) {
       console.error('Error fetching data:', error);
+      // Set empty data on error
+      if (activeTab === 'overview') {
+        setStats(null);
+      } else if (activeTab === 'sessions') {
+        setSessions([]);
+      } else if (activeTab === 'users') {
+        setUsers([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -129,62 +148,76 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  const renderOverview = () => (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+  const renderOverview = () => {
+    if (!stats) {
+      return (
+        <div className="text-center py-8 text-gray-500">
+          Unable to load statistics. Please try again.
+        </div>
+      );
+    }
+    
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Total Users</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.stats?.total_users ?? 0}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Total Sessions</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.stats?.total_conversations ?? 0}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Total Messages</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.stats?.total_messages ?? 0}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Recent Activity (24h)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.recent_activity?.recent_messages ?? 0}</div>
+            </CardContent>
+          </Card>
+        </div>
+
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Users</CardTitle>
+          <CardHeader>
+            <CardTitle>Agent Distribution</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.stats.total_users || 0}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Sessions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.stats.total_conversations || 0}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Messages</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.stats.total_messages || 0}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Recent Activity (24h)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.recent_activity.recent_messages || 0}</div>
+            <div className="space-y-2">
+              {stats?.agent_distribution && stats.agent_distribution.length > 0 ? (
+                stats.agent_distribution.map((agent: any, index: number) => (
+                  <div key={index} className="flex justify-between items-center">
+                    <Badge className={getAgentBadgeColor(agent.agent_type)}>
+                      {agent.agent_type}
+                    </Badge>
+                    <span className="font-medium">{agent.count} messages</span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-gray-500 text-sm">No agent distribution data available</div>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Agent Distribution</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {stats?.agent_distribution.map((agent, index) => (
-              <div key={index} className="flex justify-between items-center">
-                <Badge className={getAgentBadgeColor(agent.agent_type)}>
-                  {agent.agent_type}
-                </Badge>
-                <span className="font-medium">{agent.count} messages</span>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+    );
+  };
 
   const renderSessions = () => (
     <div className="space-y-4">
@@ -195,9 +228,11 @@ const AdminDashboard: React.FC = () => {
             <div className="flex justify-between items-start">
               <div>
                 <CardTitle className="text-lg">
-                  {session.first_name} {session.last_name}
+                  {session.first_name && session.last_name 
+                    ? `${session.first_name} ${session.last_name}` 
+                    : session.first_name || session.last_name || 'Guest User'}
                 </CardTitle>
-                <p className="text-sm text-gray-600">{session.email}</p>
+                <p className="text-sm text-gray-600">{session.user_email || session.email || 'No email'}</p>
               </div>
               <Badge variant="outline">{session.message_count} messages</Badge>
             </div>
@@ -210,7 +245,11 @@ const AdminDashboard: React.FC = () => {
               </div>
               <div>
                 <span className="font-medium">User ID:</span>
-                <p className="text-gray-600 font-mono text-xs">{session.user_id}</p>
+                <p className="text-gray-600 font-mono text-xs">{session.user_id || 'N/A'}</p>
+              </div>
+              <div>
+                <span className="font-medium">Phone:</span>
+                <p className="text-gray-600">{session.phone || 'N/A'}</p>
               </div>
               <div>
                 <span className="font-medium">Created:</span>
@@ -263,7 +302,12 @@ const AdminDashboard: React.FC = () => {
   );
 
   const renderSessionDetails = () => {
-    if (!selectedSession) return null;
+    if (!selectedSession || !selectedSession.session) return null;
+
+    const session = selectedSession.session;
+    const userName = session.first_name && session.last_name 
+      ? `${session.first_name} ${session.last_name}` 
+      : session.user_email || 'Guest User';
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -272,9 +316,9 @@ const AdminDashboard: React.FC = () => {
             <div className="flex justify-between items-start">
               <div>
                 <h2 className="text-2xl font-bold">
-                  {selectedSession.session.first_name} {selectedSession.session.last_name}
+                  {userName}
                 </h2>
-                <p className="text-gray-600">{selectedSession.session.email}</p>
+                <p className="text-gray-600">{session.user_email || 'No email'}</p>
               </div>
               <Button onClick={() => setSelectedSession(null)} variant="outline">
                 Close
@@ -288,19 +332,19 @@ const AdminDashboard: React.FC = () => {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="font-medium">Session ID:</span>
-                  <p className="text-gray-600 font-mono text-xs">{selectedSession.session.conversation_id}</p>
+                  <p className="text-gray-600 font-mono text-xs">{session.conversation_id || session.id || 'N/A'}</p>
                 </div>
                 <div>
                   <span className="font-medium">User ID:</span>
-                  <p className="text-gray-600 font-mono text-xs">{selectedSession.session.user_id}</p>
+                  <p className="text-gray-600 font-mono text-xs">{session.user_id || 'N/A'}</p>
                 </div>
                 <div>
                   <span className="font-medium">Phone:</span>
-                  <p className="text-gray-600">{selectedSession.session.phone || 'N/A'}</p>
+                  <p className="text-gray-600">{session.phone || 'N/A'}</p>
                 </div>
                 <div>
                   <span className="font-medium">Created:</span>
-                  <p className="text-gray-600">{formatDate(selectedSession.session.created_at)}</p>
+                  <p className="text-gray-600">{formatDate(session.created_at)}</p>
                 </div>
               </div>
             </div>
@@ -310,7 +354,8 @@ const AdminDashboard: React.FC = () => {
             <div>
               <h3 className="text-lg font-semibold mb-4">Conversation History</h3>
               <div className="space-y-4">
-                {selectedSession.messages.map((message, index) => (
+                {selectedSession.messages && selectedSession.messages.length > 0 ? (
+                  selectedSession.messages.map((message, index) => (
                   <Card key={message.id}>
                     <CardHeader className="pb-2">
                       <div className="flex justify-between items-center">
@@ -336,7 +381,12 @@ const AdminDashboard: React.FC = () => {
                       </div>
                     </CardContent>
                   </Card>
-                ))}
+                ))
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    No messages found in this session.
+                  </div>
+                )}
               </div>
             </div>
           </div>

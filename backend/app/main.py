@@ -283,16 +283,46 @@ class PriorityConsumer:
                             agent_response = agent_response.split(": ", 1)[1]
                         
                         print(f"→ {agent_type} agent processed {session_id}")
+
+                        # Get conversation info
+                        conversation_id = event.get("conversation_id")
+                        query_text = event.get("query_text", state.get("messages", [{}])[0].get("content", "") if state.get("messages") else "")
+
+                        # Save query and response to conversation
+                        if conversation_id and query_text:
+                            try:
+                                conn = get_database_connection()
+                                if conn:
+                                    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                                        cursor.execute(
+                                            "SELECT COUNT(*) as count FROM queries WHERE conversation_id = %s",
+                                            (conversation_id,)
+                                        )
+                                        result_count = cursor.fetchone()
+                                        message_order = (result_count['count'] if result_count else 0) + 1
+
+                                    save_query_to_conversation(
+                                        conversation_id=conversation_id,
+                                        user_message=query_text,
+                                        agent_type=agent_type,
+                                        agent_response=agent_response,
+                                        message_order=message_order,
+                                        user_id=state.get("user_data", {}).get("id") if isinstance(state.get("user_data"), dict) else None
+                                    )
+                                    print(f"→ Saved message to conversation {conversation_id}")
+                            except Exception as save_error:
+                                print(f"⚠️ Error saving to conversation: {save_error}")
                         
                         # Publish response to agent.responses
                         response_event = {
                             "session_id": session_id,
-                            "conversation_id": event.get("conversation_id"),
+                            "conversation_id": conversation_id,
                             "agent_type": agent_type.upper() + "_AGENT",
                             "message": agent_response,
                             "status": "completed",
                             "priority": current_priority,
-                            "timestamp": int(time.time() * 1000)
+                            "timestamp": int(time.time() * 1000),
+                            "correlation_id": event.get("correlation_id", f"corr-{uuid.uuid4()}")
                         }
                         
                         await producer.send_and_wait(
@@ -417,28 +447,44 @@ def query_rag(query_text):
         generate_data_store()
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
   
-    # This searches the chroma vector database for documents most similar to query_text. Limits it to top 3 results
-    results = db.similarity_search_with_relevance_scores(query_text, k=3)
+    # This searches the chroma vector database for documents most similar to query_text. Limits it to top 5 results
+    results = db.similarity_search_with_relevance_scores(query_text, k=5)
 
-    # If there are no results retrieved in the search or the relevance score is too low, convey ineptness
-    if len(results) == 0 or results[0][1] < 0.7:
-        print(f"Unable to find matching results.")
+    # If there are no results retrieved in the search, return error
+    if len(results) == 0:
+        print(f"⚠️ No results found in RAG database for query: {query_text}")
+        return None, "I couldn't find relevant policy information. Please contact customer support for assistance."
+
+    # Filter results by relevance score (lower threshold to include more context)
+    # Relevance scores in Chroma are typically between 0 and 1, with higher being better
+    # Lower the threshold to 0.5 to get more context
+    filtered_results = [(doc, score) for doc, score in results if score >= 0.5]
+    
+    if len(filtered_results) == 0:
+        print(f"⚠️ All results below relevance threshold. Using all results anyway.")
+        filtered_results = results
 
     # Combine context from matching documents
-    context_text = "\n\n - -\n\n".join([doc.page_content for doc, _score in results])
+    context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+    
+    print(f"✓ Found {len(filtered_results)} relevant chunks for policy query")
+    print(f"Context preview: {context_text[:200]}...")
  
     # Create prompt template using context and query text
     prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-    prompt = prompt_template.format(context=context_text, question=query_text)
+    formatted_prompt = prompt_template.format(context=context_text, question=query_text)
   
-    # Initialize OpenAI chat model
+    # Initialize OpenAI chat model (use same instance as rest of code)
     model = ChatOpenAI()
 
     # Generate response text based on the prompt
-    response_text = model.predict(prompt)
+    # ChatOpenAI can accept a string directly, but using messages format for consistency
+    messages = [{"role": "user", "content": formatted_prompt}]
+    response = model.invoke(messages)
+    response_text = response.content if hasattr(response, 'content') else str(response)
  
     # Get sources of the matching documents
-    sources = [doc.metadata.get("source", None) for doc, _score in results]
+    sources = [doc.metadata.get("source", None) for doc, _score in filtered_results]
  
     # Format and return response including generated text and sources
     formatted_response = f"Response: {response_text}\nSources: {sources}"
@@ -451,7 +497,8 @@ def query_rag(query_text):
 
 load_dotenv()
 
-# Session configuration since we do not have user account tracking set up yet
+# Session configuration - deprecated, use user_email from state instead
+# Keeping as fallback for backward compatibility only
 SESSION_EMAIL = "jeremyyhop@gmail.com"
 
 from langchain_anthropic import ChatAnthropic
@@ -604,58 +651,98 @@ async def order_agent(state: State):
     session_id = state.get("session_id", str(uuid.uuid4()))
     conversation_id = state.get("conversation_id", str(uuid.uuid4()))
     
+    # Get user information from state
+    user_email = state.get("user_email") or (state.get("user_data", {}).get("email") if isinstance(state.get("user_data"), dict) else None)
+    user_id = state.get("user_id") or (state.get("user_data", {}).get("id") if isinstance(state.get("user_data"), dict) else None)
+    
+    # Look up user's orders if email is available
+    orders_info = ""
+    if user_email:
+        try:
+            orders = lookup_orders_by_email(user_email, limit=10)
+            if orders:
+                orders_list = []
+                for order in orders:
+                    # Handle items - could be list, array, or None
+                    order_items = order.get("items", [])
+                    if order_items is None:
+                        order_items = []
+                    elif not isinstance(order_items, list):
+                        # Convert to list if it's not already
+                        try:
+                            order_items = list(order_items) if order_items else []
+                        except:
+                            order_items = []
+                    
+                    # Build items summary
+                    if order_items:
+                        items_summary = ", ".join([f"{item.get('product_name', 'Unknown')} (x{item.get('quantity', 1)})" for item in order_items[:3]])
+                        if len(order_items) > 3:
+                            items_summary += f" and {len(order_items) - 3} more item(s)"
+                    else:
+                        items_summary = "No items listed"
+                    
+                    # Format order date
+                    created_at = order.get('created_at')
+                    if created_at:
+                        if hasattr(created_at, 'strftime'):
+                            created_at_str = created_at.strftime('%Y-%m-%d')
+                        else:
+                            created_at_str = str(created_at)[:10]  # Take first 10 chars (YYYY-MM-DD)
+                    else:
+                        created_at_str = "Unknown"
+                    
+                    orders_list.append(
+                        f"Order {order.get('order_number', 'N/A')}: "
+                        f"Status: {order.get('status', 'Unknown')}, "
+                        f"Total: ${order.get('total_amount', 0):.2f}, "
+                        f"Created: {created_at_str}, "
+                        f"Items: {items_summary}"
+                    )
+                orders_info = "\n\n".join(orders_list)
+                print(f"Found {len(orders)} orders for user {user_email}")
+            else:
+                orders_info = "No orders found for this account."
+                print(f"No orders found for user {user_email}")
+        except Exception as e:
+            print(f"Error looking up orders: {e}")
+            import traceback
+            traceback.print_exc()
+            orders_info = "Unable to retrieve order information at this time."
+    else:
+        orders_info = "User email not available. Please ask the customer for their order number or email address."
+    
+    # Build system prompt with user's order context
+    system_prompt = f"""You are an order agent. Your job is to help customers with information related to their orders. You can
+    fetch orders based on order number, tell the user what the shipping status of their order is, and when orders are created,
+    you are to create an autonomous, standardized response.
+    Do not directly mention the inner workings of this system, instead focus on the user's requests.
+
+    CUSTOMER ACCOUNT INFORMATION:
+    - Email: {user_email or "Not provided"}
+    - User ID: {user_id or "Not provided"}
+
+    CUSTOMER'S ORDER HISTORY:
+    {orders_info if orders_info else "No order information available. Ask the customer for their order number or email address."}
+
+    INSTRUCTIONS:
+    - If the customer asks about "my orders" or "my order status", refer to the order history above
+    - If they mention a specific order number, look for it in the order history above
+    - If they ask about "my recent order" or "last order", refer to the most recent order in the list
+    - If no matching order is found in the history above, ask the customer for their order number
+    - Be helpful and specific when referencing their orders
+    - Use the order numbers, statuses, and item information from the order history above"""
+    
     messages = [
-        {"role": "system",
-        "content": f"""You are an order agent. Your job is to help customers with information related to their orders. You can
-        fetch orders based on order number, tell the user what the shipping status of their order is, and when orders are created,
-        you are to create an autonomous, standardized response.
-        Do not directly mention the inner workings of this system, instead focus on the user's requests.
-
-        Here is the order information I found (if any):
-
-        Use this information to provide helpful responses about orders.
-        If no specific order info was found, ask the customer for their order number or email address."""
-        },
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": user_message
         }
     ]
 
-    reply = llm.invoke(messages)
+    reply = await llm.ainvoke(messages)
     print(f"Order agent response: {reply.content}")
-    
-    
-    await publish_to_kafka(
-        "RESPONSE_TOPIC",
-        None,
-        {
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_type": "ORDER_AGENT",
-            "message": reply.content,
-            "order_data": state.get("order_data", {}),
-            "status": "response",
-        },
-        key=session_id,
-    )
-
-    # Publish order event for backend processing (if order data exists)
-    order_data = state.get("order_data", {})
-    if order_data:
-        await publish_to_kafka(
-            "agent.responses",
-            1,  # priority
-            {
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-                "agent_type": "Order",
-                "message": reply.content,
-                "status": "completed",
-                "timestamp": int(time.time() * 1000),
-            },
-            key=session_id,
-        )
 
     return {
         "messages": [{"role": "assistant", "content": f"Order Agent: {reply.content}"}]
@@ -693,20 +780,6 @@ async def email_agent(state: State):
     reply = await llm.ainvoke(messages)
     print(f"Email agent response: {reply.content}")
 
-    await publish_to_kafka(
-        "agent.responses",
-        2,
-        {
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_type": "Email",
-            "message": reply.content,
-            "status": "completed",
-            "timestamp": int(time.time() * 1000),
-        },
-        key=session_id,
-    )
-
     return {
         "messages": [{"role": "assistant", "content": f"Email Agent: {reply.content}"}]
     }
@@ -720,13 +793,21 @@ def handle_information_change_notification(state: State):
     if not changes_made:
         return {"messages": [{"role": "assistant", "content": "Email Agent: No changes to notify about."}]}
     
+    # Get user email from state (logged-in user context)
+    user_email = state.get("user_email") or (state.get("user_data", {}).get("email") if isinstance(state.get("user_data"), dict) else None)
+    
+    # Fallback to SESSION_EMAIL only if no user_email in state (backward compatibility)
+    if not user_email:
+        user_email = SESSION_EMAIL
+        print(f"Warning: No user_email in state for email notification, using fallback SESSION_EMAIL")
+    
     # Send the information change email
-    email_sent = send_information_change_email(changes_made)
+    email_sent = send_information_change_email(changes_made, recipient_email=user_email)
     
     
     if email_sent:
-        # Notify the user the email was sent to the session email
-        response = f"I've sent you a security notification email about the changes made to your account. Please check your email at {SESSION_EMAIL}."
+        # Notify the user the email was sent to their email
+        response = f"I've sent you a security notification email about the changes made to your account. Please check your email at {user_email}."
     else:
         # If the email fails, notify the user of changes made
         changes_text = ", ".join(changes_made)
@@ -773,8 +854,16 @@ def handle_order_receipt_request(state: State):
     
     print(f"Parsed receipt request: {parsing_result}")
     
-    # Use session email to process the request
-    return process_receipt_request(parsing_result.model_dump(), SESSION_EMAIL, conversation_context, state)
+    # Get user email from state (logged-in user context)
+    user_email = state.get("user_email") or (state.get("user_data", {}).get("email") if isinstance(state.get("user_data"), dict) else None)
+    
+    # Fallback to SESSION_EMAIL only if no user_email in state (backward compatibility)
+    if not user_email:
+        user_email = SESSION_EMAIL
+        print(f"Warning: No user_email in state for order receipt, using fallback SESSION_EMAIL")
+    
+    # Use user email to process the request
+    return process_receipt_request(parsing_result.model_dump(), user_email, conversation_context, state)
 
 def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
     order_data = None
@@ -815,18 +904,18 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
     
     # If we found an order, send the receipt
     if order_data:
-        email_sent = send_order_receipt_email(order_data)
+        email_sent = send_order_receipt_email(order_data, recipient_email=user_email)
         
         if email_sent:
-            response = f"I've sent the receipt for order {order_data['order_number']} to jeremyyhop@gmail.com."
+            response = f"I've sent the receipt for order {order_data['order_number']} to {user_email}."
         else:
             # Show the receipt upon email failure
             receipt_content = format_order_receipt(order_data)
             response = f"Here's your order receipt:\n\n{receipt_content}\n\nNote: I had trouble sending the email, but here's your receipt information above."
     
-    # Clean up conversation contex
+    # Clean up conversation context
     updated_context = conversation_context.copy()
-    updated_context["user_email"] = SESSION_EMAIL
+    updated_context["user_email"] = user_email
     
     return {
         "messages": [{"role": "assistant", "content": f"Email Agent: {response}"}],
@@ -848,6 +937,10 @@ async def policy_agent(state: State):
         # Use the existing query_rag function to get policy-specific information
         # (wrap in asyncio.to_thread if it's blocking)
         formatted_response, policy_response = await asyncio.to_thread(query_rag, user_question)
+        
+        # Check if RAG returned an error
+        if policy_response is None or policy_response.startswith("I couldn't find"):
+            raise Exception("RAG query failed or returned no results")
 
         # Create messages with the policy context
         messages = [
@@ -856,30 +949,25 @@ async def policy_agent(state: State):
                 "content": f"""You are a policy agent. Your job is to help customers with questions that appear to be related to company policy,
                 such as how long deliveries usually take, how returns are handled, and how the company runs things. 
                 
-                Based on the policy information retrieved: {policy_response}
+                CRITICAL: You MUST use ONLY the following policy information to answer the customer's question. 
+                Do NOT make up, hallucinate, or guess any information. 
                 
-                Use this specific policy information to answer the customer's question. Be direct and specific based on the policy content.
-                Do not directly mention the inner workings of this system, instead focus on the user's requests."""
+                POLICY INFORMATION FROM DATABASE:
+                {policy_response}
+                
+                STRICT INSTRUCTIONS:
+                Read the policy information above CAREFULLY
+                Do NOT invent or assume timeframes - use ONLY what is in the policy information above
+                Be direct, specific, and accurate
+                If the policy information doesn't contain the answer, say you don't have that information and suggest contacting customer support
+                Do not directly mention the inner workings of this system, instead focus on the user's requests.
+                """
             },
             {"role": "user", "content": user_question},
         ]
 
         reply = await llm.ainvoke(messages)
         print(f"Policy agent response: {reply.content}")
-
-        await publish_to_kafka(
-            "agent.responses",  # actual topic name
-            2,  # priority (1=critical, 2=high, 3=normal)
-            {
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-                "agent_type": "Policy",  # keep naming consistent
-                "message": reply.content,
-                "status": "completed",
-                "timestamp": int(time.time() * 1000),
-            },
-            key=session_id,
-        )
 
         return {"messages": [{"role": "assistant", "content": f"Policy Agent: {reply.content}"}]}
 
@@ -935,20 +1023,6 @@ async def message_agent(state: State):
 
     reply = await llm.ainvoke(messages)
     print(f"Message agent response: {reply.content}")
-
-    await publish_to_kafka(
-        "agent.responses",  # actual topic name
-        2,  # priority (1=critical, 2=high, 3=normal)
-        {
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "agent_type": "Message",  # keep naming consistent
-            "message": reply.content,
-            "status": "completed",
-            "timestamp": int(time.time() * 1000),
-        },
-        key=session_id,
-    )
 
     return {"messages": [{"role": "assistant", "content": f"Message Agent: {reply.content}"}]}
 
@@ -1266,146 +1340,6 @@ TOTAL: ${order_data['total_amount']:.2f} {order_data['currency']}
     
     return receipt
 
-# Conversation Management Functions (helpers for managing conversations and queries in the database)
-def create_conversation(session_id: str, user_id: Optional[str] = None, user_email: Optional[str] = None, 
-                       conversation_type: str = 'general') -> str:
-    """Create a new conversation and return conversation_id"""
-    conn = get_database_connection()
-    if not conn:
-        return None
-    
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            conversation_id = str(uuid.uuid4())
-            query = """
-            INSERT INTO conversations (id, session_id, user_id, user_email, conversation_type, context)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(query, (conversation_id, session_id, user_id, user_email, conversation_type, json.dumps({})))
-            conn.commit()
-            return conversation_id
-    except Exception as e:
-        print(f"Error creating conversation: {e}")
-        conn.rollback()
-        return None
-    finally:
-        conn.close()
-
-def get_conversation(session_id: str) -> Optional[Dict[str, Any]]:
-    """Get conversation by session_id"""
-    conn = get_database_connection()
-    if not conn:
-        return None
-    
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            query = """
-            SELECT id, session_id, user_id, user_email, status, conversation_type, context, created_at, updated_at
-            FROM conversations 
-            WHERE session_id = %s AND status = 'active'
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
-            cursor.execute(query, (session_id,))
-            conversation = cursor.fetchone()
-            return dict(conversation) if conversation else None
-    except Exception as e:
-        print(f"Error getting conversation: {e}")
-        return None
-    finally:
-        conn.close()
-
-# Update conversation context and optionally user_id and user_email
-def update_conversation_context(conversation_id: str, context: Dict[str, Any], 
-                              user_id: Optional[str] = None, user_email: Optional[str] = None) -> bool:
-    """Update conversation context and user information"""
-    conn = get_database_connection()
-    if not conn:
-        return False
-    
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Build dynamic update query
-            update_fields = ["context = %s", "updated_at = CURRENT_TIMESTAMP"]
-            values = [json.dumps(context)]
-            
-            if user_id:
-                update_fields.append("user_id = %s")
-                values.append(user_id)
-                
-            if user_email:
-                update_fields.append("user_email = %s")
-                values.append(user_email)
-            
-            values.append(conversation_id)
-            
-            query = f"""
-            UPDATE conversations 
-            SET {', '.join(update_fields)}
-            WHERE id = %s
-            """
-            
-            cursor.execute(query, values)
-            conn.commit()
-            return cursor.rowcount > 0
-    except Exception as e:
-        print(f"Error updating conversation context: {e}")
-        conn.rollback()
-        return False
-    finally:
-        conn.close()
-
-# Once we have a conversation, we can log each query and response for history
-def save_query_to_conversation(conversation_id: str, user_message: str, agent_type: str, 
-                              agent_response: str, message_order: int, user_id: Optional[str] = None) -> str:
-    """Save a query and response to the conversation"""
-    conn = get_database_connection()
-    if not conn:
-        return None
-    
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            query_id = str(uuid.uuid4())
-            query = """
-            INSERT INTO queries (id, conversation_id, user_id, query_text, agent_type, agent_response, 
-                               message_order, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            cursor.execute(query, (query_id, conversation_id, user_id, user_message, agent_type, 
-                                 agent_response, message_order, 'completed'))
-            conn.commit()
-            return query_id
-    except Exception as e:
-        print(f"Error saving query to conversation: {e}")
-        conn.rollback()
-        return None
-    finally:
-        conn.close()
-
-# This is used for debugging and to show conversation history in the UI
-def get_conversation_history(conversation_id: str) -> List[Dict[str, Any]]:
-    """Get conversation history with all queries and responses"""
-    conn = get_database_connection()
-    if not conn:
-        return []
-    
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            query = """
-            SELECT query_text, agent_type, agent_response, message_order, created_at
-            FROM queries 
-            WHERE conversation_id = %s
-            ORDER BY message_order ASC
-            """
-            cursor.execute(query, (conversation_id,))
-            history = cursor.fetchall()
-            return [dict(row) for row in history]
-    except Exception as e:
-        print(f"Error getting conversation history: {e}")
-        return []
-    finally:
-        conn.close()
-
 # Handle change information requests with multi-turn conversation support
 def handle_change_information(state: State):
     """Handle change information requests with multi-turn conversation support"""
@@ -1413,7 +1347,7 @@ def handle_change_information(state: State):
     user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
     conversation_context = state.get("conversation_context", {})
     
-    # No need for email handling - we use SESSION_EMAIL
+    # User email will be retrieved from state (logged-in user context)
     
     # Use LLM to parse the change information request
     parser_llm = llm.with_structured_output(UserInformationParser)
@@ -1449,8 +1383,16 @@ def handle_change_information(state: State):
     
     print(f"Parsed change information: {parsing_result}")
     
-    # Use session email to look up the user
-    user_data = lookup_user_by_email(SESSION_EMAIL)
+    # Get user email from state (logged-in user context)
+    user_email = state.get("user_email") or (state.get("user_data", {}).get("email") if isinstance(state.get("user_data"), dict) else None)
+    
+    # Fallback to SESSION_EMAIL only if no user_email in state (backward compatibility)
+    if not user_email:
+        user_email = SESSION_EMAIL
+        print(f"Warning: No user_email in state, using fallback SESSION_EMAIL")
+    
+    # Use user email to look up the user
+    user_data = lookup_user_by_email(user_email)
     
     # Prepare updates based on parsed information
     updates = {}
@@ -1474,7 +1416,7 @@ def handle_change_information(state: State):
     
     # Check if user exists
     if not user_data:
-        response = f"I couldn't find your account with email {SESSION_EMAIL}. Please contact customer support for assistance."
+        response = f"I couldn't find your account with email {user_email}. Please contact customer support for assistance."
         return {
             "messages": [{"role": "assistant", "content": f"Message Agent: {response}"}],
             "parsed_changes": parsing_result.model_dump(),
@@ -1503,7 +1445,7 @@ def handle_change_information(state: State):
             updated_context = conversation_context.copy()
             updated_context["user_identified"] = True
             updated_context["user_id"] = user_data['id']
-            updated_context["user_email"] = SESSION_EMAIL
+            updated_context["user_email"] = user_email
             
             # Set flags for email notification
             information_changed = True
@@ -1601,12 +1543,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include routers for chat history and admin dashboard
+from .chathistory import router as chathistory_router
+from .admindashboard import router as admindashboard_router
+
+app.include_router(chathistory_router)
+app.include_router(admindashboard_router)
+
 class IngressMessage(BaseModel):
     session_id: str
     user_id: Optional[str] = None
+    user_email: Optional[str] = None
     query_text: str
     correlation_id: Optional[str] = None
     event_timestamp: Optional[int] = None
+    conversation_id: Optional[str] = None
 
 # Import modular components
 from .auth import authenticate_user, lookup_user_by_email, LoginRequest, LoginResponse
@@ -1615,6 +1566,12 @@ from .api_endpoints import (
     UserProfileResponse, OrdersResponse, HealthResponse,
     get_user_profile, get_user_orders, get_order_details,
     lookup_orders_by_email, lookup_order_by_number
+)
+from database import (
+    create_conversation,
+    get_conversation,
+    update_conversation_context,
+    save_query_to_conversation
 )
 
 priority_consumer: PriorityConsumer | None = None
@@ -1632,11 +1589,41 @@ async def publish_to_ingress(message: IngressMessage):
     if not message.correlation_id:
         message.correlation_id = f"corr-{uuid.uuid4()}"
     
+    # Look up user_id from email if not provided
+    user_id = message.user_id
+    if not user_id and message.user_email:
+        user_data = lookup_user_by_email(message.user_email)
+        if user_data:
+            user_id = str(user_data['id'])
+    
+    # Get or create conversation for this session
+    if message.conversation_id:
+        conversation_id = message.conversation_id
+    else:
+        conversation = get_conversation(message.session_id)
+        if not conversation:
+            # Create new conversation
+            conversation_id = create_conversation(
+                session_id=message.session_id,
+                user_email=message.user_email,
+                user_id=user_id
+            )
+            if not conversation_id:
+                conversation_id = str(uuid.uuid4())  # Fallback if DB fails
+        else:
+            conversation_id = conversation['id']
+            # Update conversation with user info if not already set
+            if user_id and not conversation.get('user_id'):
+                update_conversation_context(conversation_id, conversation.get('context', {}), 
+                                          user_id=user_id, user_email=message.user_email)
+    
     kafka_message = {
         "session_id": message.session_id,
-        "user_id": message.user_id,
+        "user_id": user_id,
+        "user_email": message.user_email,
         "query_text": message.query_text,
         "correlation_id": message.correlation_id,
+        "conversation_id": conversation_id,
         "event_timestamp": message.event_timestamp,
         "event_type": "CUSTOMER_QUERY",
         "status": "pending"
@@ -1649,8 +1636,12 @@ async def publish_to_ingress(message: IngressMessage):
             key=message.session_id
         )
         
-        print(f"→ Published ingress for {message.session_id}")
-        return {"success": True, "message": f"Published to {INGRESS_TOPIC}"}
+        print(f"→ Published ingress for {message.session_id}, conversation: {conversation_id}")
+        return {
+            "success": True,
+            "message": f"Published to {INGRESS_TOPIC}",
+            "conversation_id": conversation_id
+        }
     except Exception as e:
         print(f"✗ Publish error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1778,6 +1769,7 @@ async def get_order_details_endpoint(order_number: str):
     """Get detailed information about a specific order"""
     return await get_order_details(order_number)
 
+
 async def orchestrator_consumer():
     """
     Enhanced orchestrator that:
@@ -1813,12 +1805,31 @@ async def orchestrator_consumer():
             print(f"→ Orchestrator received event for {session_id}")
             
             try:
+                # Get user information from event
+                user_email = event.get("user_email")
+                user_id = event.get("user_id")
+                user_data = {}
+                
+                # Look up user if email is provided
+                if user_email:
+                    user_lookup = lookup_user_by_email(user_email)
+                    if user_lookup:
+                        user_data = {
+                            "id": str(user_lookup.get("id", "")),
+                            "email": user_lookup.get("email", ""),
+                            "first_name": user_lookup.get("first_name"),
+                            "last_name": user_lookup.get("last_name"),
+                            "phone": user_lookup.get("phone")
+                        }
+                
                 # Build state from event
                 state = {
                     "messages": [{"role": "user", "content": event.get("query_text", "")}],
                     "message_type": None,
                     "order_data": {},
-                    "user_data": {},
+                    "user_data": user_data,
+                    "user_email": user_email,  # Add user_email to state for easy access
+                    "user_id": user_id,  # Add user_id to state for easy access
                     "parsed_changes": {},
                     "conversation_id": event.get("conversation_id", str(uuid.uuid4())),
                     "session_id": session_id,
