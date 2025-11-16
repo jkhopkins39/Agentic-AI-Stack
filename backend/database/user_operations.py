@@ -11,7 +11,7 @@ def lookup_user_by_email(email: str):
         with conn.cursor() as cursor:
             # Define a query to retrieve user information by email
             query = """
-            SELECT id, email, first_name, last_name, phone, created_at, updated_at
+            SELECT id, email, first_name, last_name, phone, is_admin, created_at, updated_at
             FROM users 
             WHERE LOWER(email) = LOWER(%s)
             """

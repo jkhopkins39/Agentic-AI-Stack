@@ -2,7 +2,9 @@
  * API Service for communicating with the backend
  */
 
-const API_BASE_URL = 'http://localhost:8000/api';
+import { API_BASE_URL } from '../config';
+
+const API_BASE_PATH = `${API_BASE_URL}/api`;
 
 export interface UserProfile {
   id: string;
@@ -10,6 +12,7 @@ export interface UserProfile {
   first_name: string | null;
   last_name: string | null;
   phone: string | null;
+  is_admin: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -66,7 +69,7 @@ export interface HealthResponse {
 
 class ApiService {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${API_BASE_URL}${endpoint}`;
+    const url = `${API_BASE_PATH}${endpoint}`;
     
     const defaultOptions: RequestInit = {
       headers: {

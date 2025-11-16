@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Label } from './ui/label';
 import { Alert, AlertDescription } from './ui/alert';
 import { Loader2, Mail, Lock, MessageSquare, User, Copy, Check } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 interface LoginProps {
   onLogin: (email: string) => void;
@@ -23,7 +24,7 @@ export function Login({ onLogin }: LoginProps) {
     setError('');
 
     try {
-      const response = await fetch('http://localhost:8000/api/auth/login', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

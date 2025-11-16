@@ -17,8 +17,7 @@ function AppContent() {
   const { isAuthenticated, login, userProfile, currentUserEmail } = useUser();
 
   // Determine if current user has admin access
-  const isAdmin = userProfile?.profile?.email === 'admin@example.com' || 
-                  userProfile?.profile?.email?.includes('admin');
+  const isAdmin = userProfile?.profile?.is_admin === true;
 
   // Reset app state when user changes (but not on initial mount)
   const prevUserEmailRef = React.useRef<string | null>(null);

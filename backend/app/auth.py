@@ -20,6 +20,26 @@ class LoginResponse(BaseModel):
     user: Optional[Dict[str, Any]] = None
 
 
+DEFAULT_USERS = [
+    {
+        "email": "admin@example.com",
+        "password": "\\/LewdBPj4J/8KzKz2K",
+        "first_name": "Admin",
+        "last_name": "User",
+        "phone": "555-0000",
+        "is_admin": True,
+    },
+    {
+        "email": "guest@example.com",
+        "password": "guestpass",
+        "first_name": "Guest",
+        "last_name": "User",
+        "phone": None,
+        "is_admin": False,
+    },
+]
+
+
 def get_database_connection():
     """Get database connection using environment variables"""
     try:
@@ -53,7 +73,7 @@ def authenticate_user(email: str, password: str) -> Optional[Dict[str, Any]]:
             # For now, we'll use a simple password check
             # In production, you'd hash passwords and compare hashes
             query = """
-            SELECT id, email, first_name, last_name, phone, created_at, updated_at
+            SELECT id, email, first_name, last_name, phone, is_admin, created_at, updated_at
             FROM users 
             WHERE LOWER(email) = LOWER(%s) AND password_hash = %s
             """
@@ -76,7 +96,7 @@ def lookup_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = """
-            SELECT id, email, first_name, last_name, phone, created_at, updated_at
+            SELECT id, email, first_name, last_name, phone, is_admin, created_at, updated_at
             FROM users 
             WHERE LOWER(email) = LOWER(%s)
             """
@@ -86,6 +106,52 @@ def lookup_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"Error looking up user: {e}")
         return None
+    finally:
+        conn.close()
+
+
+def ensure_default_users():
+    """Ensure required default users exist and schema is aligned."""
+    conn = get_database_connection()
+    if not conn:
+        print("⚠️ Unable to ensure default users - database unavailable")
+        return
+    
+    try:
+        with conn.cursor() as cursor:
+            # Ensure schema has is_admin column
+            cursor.execute("""
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
+            """)
+            
+            for user in DEFAULT_USERS:
+                cursor.execute(
+                    """
+                    INSERT INTO users (email, password_hash, first_name, last_name, phone, is_admin)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (email) DO UPDATE SET
+                        password_hash = EXCLUDED.password_hash,
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        phone = EXCLUDED.phone,
+                        is_admin = EXCLUDED.is_admin,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        user["email"],
+                        user["password"],
+                        user["first_name"],
+                        user["last_name"],
+                        user["phone"],
+                        user["is_admin"],
+                    ),
+                )
+        conn.commit()
+        print("✓ Default admin/guest users ensured")
+    except Exception as e:
+        conn.rollback()
+        print(f"✗ Failed to ensure default users: {e}")
     finally:
         conn.close()
 

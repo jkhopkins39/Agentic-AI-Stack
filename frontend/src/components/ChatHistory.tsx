@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Plus, MessageSquare, X, Loader2, Trash2 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
+import { API_BASE_URL } from '../config';
 
 interface ChatSession {
   conversation_id: string;
@@ -31,7 +32,7 @@ export function ChatHistory({ isOpen, onClose, onSelectConversation, onNewChat, 
     setLoading(true);
     try {
       const response = await fetch(
-        `http://localhost:8000/api/conversations?user_email=${encodeURIComponent(userProfile.profile.email)}&limit=20`
+        `${API_BASE_URL}/api/conversations?user_email=${encodeURIComponent(userProfile.profile.email)}&limit=20`
       );
       const data = await response.json();
       setChatSessions(data.conversations || []);
@@ -76,7 +77,7 @@ export function ChatHistory({ isOpen, onClose, onSelectConversation, onNewChat, 
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/conversations/${conversationId}?user_email=${encodeURIComponent(userProfile?.profile?.email || '')}`,
+        `${API_BASE_URL}/api/conversations/${conversationId}?user_email=${encodeURIComponent(userProfile?.profile?.email || '')}`,
         {
           method: 'DELETE',
         }

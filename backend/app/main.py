@@ -130,6 +130,13 @@ def generate_data_store():
 load_dotenv()
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
+VERBOSE_CONSUMER_LOGS = os.getenv("VERBOSE_CONSUMER_LOGS", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def verbose_polling_log(message: str) -> None:
+    """Emit noisy consumer/orchestrator logs only when explicitly enabled."""
+    if VERBOSE_CONSUMER_LOGS:
+        print(message)
 
 from contextlib import asynccontextmanager
 PRIORITY_TOPICS = {
@@ -179,6 +186,8 @@ class PriorityConsumer:
                 value_deserializer=lambda m: json.loads(m.decode("utf-8")),
                 auto_offset_reset="earliest",
                 enable_auto_commit=False,
+                session_timeout_ms=30000,  # Increased to 30s to handle email operations
+                request_timeout_ms=30000
             )
             await consumer.start()
             
@@ -238,7 +247,7 @@ class PriorityConsumer:
                     now = time.time()
                     if now - last_p3_check >= p3_check_interval:
                         last_p3_check = now
-                        print(f"🔍 {agent_type} checking p3...")
+                        verbose_polling_log(f"🔍 {agent_type} checking p3...")
                         try:
                             data = await consumers[3].getmany(timeout_ms=50, max_records=1)
                             if data:
@@ -361,6 +370,7 @@ async def lifespan(app: FastAPI):
     global producer, priority_consumer
         
         # Startup
+    ensure_default_users()
     producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
@@ -822,7 +832,7 @@ def handle_information_change_notification(state: State):
 User either provides it all at once or we ask follow-up questions. This function uses
 an LLM to parse the request and extract relevant variables. It is called conditionally
 to reduce number of API calls and latency"""
-def handle_order_receipt_request(state: State):
+async def handle_order_receipt_request(state: State):
     last_message = state["messages"][-1]
     user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
 
@@ -863,9 +873,9 @@ def handle_order_receipt_request(state: State):
         print(f"Warning: No user_email in state for order receipt, using fallback SESSION_EMAIL")
     
     # Use user email to process the request
-    return process_receipt_request(parsing_result.model_dump(), user_email, conversation_context, state)
+    return await process_receipt_request(parsing_result.model_dump(), user_email, conversation_context, state)
 
-def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
+async def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
     order_data = None
     
     if parsed_request.get("order_number") and parsed_request["order_number"] not in ['<UNKNOWN>', None, '']:
@@ -902,9 +912,20 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
         else:
             response = f"I couldn't find any orders for {user_email}. Please check your email address."
     
-    # If we found an order, send the receipt
+    # If we found an order, send the receipt (non-blocking to avoid Kafka timeout)
     if order_data:
-        email_sent = send_order_receipt_email(order_data, recipient_email=user_email)
+        # Run email sending in executor to avoid blocking Kafka consumer
+        loop = asyncio.get_event_loop()
+        try:
+            email_sent = await loop.run_in_executor(
+                None, 
+                send_order_receipt_email, 
+                order_data, 
+                user_email
+            )
+        except Exception as e:
+            print(f"⚠️ Error in email executor: {e}")
+            email_sent = False
         
         if email_sent:
             response = f"I've sent the receipt for order {order_data['order_number']} to {user_email}."
@@ -1243,7 +1264,7 @@ Please do not reply to this email.
 
 # Send order receipt email using SendGrid SMTP relay. In production recipient email will be session email
 def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyhop@gmail.com"):
-    """Send order receipt email using SendGrid SMTP relay"""
+    """Send order receipt email using SendGrid SMTP relay with timeout protection"""
     if not SMTP_AVAILABLE:
         print("SMTP not available. Email would have been sent to:", recipient_email)
         print("Order receipt content:", format_order_receipt(order_data))
@@ -1254,6 +1275,13 @@ def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyho
     smtp_port = 587  # Using TLS port
     smtp_username = "apikey"
     smtp_password = os.getenv('SENDGRID_API_KEY')  # Required - must be set in .env file
+    
+    # Check if API key is configured
+    if not smtp_password:
+        print("⚠️ SENDGRID_API_KEY not configured. Cannot send email.")
+        print("Email would have been sent to:", recipient_email)
+        print("Order receipt content:", format_order_receipt(order_data))
+        return False
     
     try:
         # Format the order receipt
@@ -1286,21 +1314,36 @@ def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyho
         msg.attach(part1)
         msg.attach(part2)
         
-        # Send the email using SMTP
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        # Send the email using SMTP with timeout (5 seconds per operation)
+        import socket
+        socket.setdefaulttimeout(5)  # Set global socket timeout
+        
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=5)
         server.starttls()  # Enable TLS encryption
         server.login(smtp_username, smtp_password)
         server.send_message(msg)
         server.quit()
         
-        print(f"Email sent successfully via SMTP to {recipient_email}")
+        print(f"✓ Email sent successfully via SMTP to {recipient_email}")
         return True
         
-    except Exception as e:
-        print(f"Error sending email via SMTP: {e}")
+    except socket.timeout:
+        print(f"⚠️ SMTP connection timeout. Email not sent to {recipient_email}")
+        print("Order receipt content:", format_order_receipt(order_data))
+        return False
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"⚠️ SMTP authentication failed (invalid API key): {e}")
         print("Email would have been sent to:", recipient_email)
         print("Order receipt content:", format_order_receipt(order_data))
         return False
+    except Exception as e:
+        print(f"⚠️ Error sending email via SMTP: {e}")
+        print("Email would have been sent to:", recipient_email)
+        print("Order receipt content:", format_order_receipt(order_data))
+        return False
+    finally:
+        # Reset socket timeout
+        socket.setdefaulttimeout(None)
 
 def format_order_receipt(order_data: dict) -> str:
     """Format order data into a readable receipt"""
@@ -1560,12 +1603,19 @@ class IngressMessage(BaseModel):
     conversation_id: Optional[str] = None
 
 # Import modular components
-from .auth import authenticate_user, lookup_user_by_email, LoginRequest, LoginResponse
+from .auth import (
+    authenticate_user,
+    ensure_default_users,
+    lookup_user_by_email,
+    LoginRequest,
+    LoginResponse,
+)
 from .api_endpoints import (
     UserProfile, UserAddress, OrderItem, Order, 
     UserProfileResponse, OrdersResponse, HealthResponse,
     get_user_profile, get_user_orders, get_order_details,
-    lookup_orders_by_email, lookup_order_by_number
+    lookup_orders_by_email, lookup_order_by_number,
+    create_order, CreateOrderRequest
 )
 from database import (
     create_conversation,
@@ -1659,7 +1709,7 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",  # ✅ Change back to latest
         enable_auto_commit=True,
-        session_timeout_ms=6000,
+        session_timeout_ms=30000,  # Increased to 30s to handle email operations
         request_timeout_ms=30000
     )
     
@@ -1706,6 +1756,7 @@ async def login(request: LoginRequest):
             first_name=user_data.get('first_name'),
             last_name=user_data.get('last_name'),
             phone=user_data.get('phone'),
+            is_admin=user_data.get('is_admin', False),
             created_at=user_data['created_at'].isoformat(),
             updated_at=user_data['updated_at'].isoformat()
         )
@@ -1769,6 +1820,38 @@ async def get_order_details_endpoint(order_number: str):
     """Get detailed information about a specific order"""
     return await get_order_details(order_number)
 
+# Create Order Endpoint
+@app.post("/api/orders", response_model=Order)
+async def create_order_endpoint(request: CreateOrderRequest):
+    """Create a new order for a user"""
+    return await create_order(request)
+
+# Get Products Endpoint
+@app.get("/api/products")
+async def get_products_endpoint():
+    """Get list of available products"""
+    from database.connection import get_database_connection
+    from psycopg2.extras import RealDictCursor
+    
+    conn = get_database_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT id, name, description, price, stock_quantity
+                FROM products
+                ORDER BY name
+            """)
+            products = cursor.fetchall()
+            return {"products": [dict(product) for product in products]}
+    except Exception as e:
+        print(f"Error fetching products: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        conn.close()
+
 
 async def orchestrator_consumer():
     """
@@ -1782,7 +1865,9 @@ async def orchestrator_consumer():
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id="orchestrator-group-v2",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        auto_offset_reset="earliest"
+        auto_offset_reset="earliest",
+        session_timeout_ms=30000,  # Increased to 30s to handle email operations
+        request_timeout_ms=30000
     )
     
     await consumer.start()
@@ -1795,11 +1880,11 @@ async def orchestrator_consumer():
 
     print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
 
-    print(f"🔍 Orchestrator ENTERING async for loop")
+    verbose_polling_log("🔍 Orchestrator ENTERING async for loop")
     try:
         async for message in consumer:
             print(f"⚡ LOOP ITERATION - got message from partition {message.partition}")  # ADD THIS
-            print(f"🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
+            verbose_polling_log("🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
             event = message.value
             session_id = event.get("session_id", "unknown")
             print(f"→ Orchestrator received event for {session_id}")

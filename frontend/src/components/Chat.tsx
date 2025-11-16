@@ -4,6 +4,7 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Send, Clock, CheckCircle, XCircle, Bot, Loader2 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
+import { API_BASE_URL, WS_BASE_URL } from '../config';
 
 type MessageStatus = 'pending' | 'fulfilled' | 'unfulfilled';
 
@@ -110,7 +111,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
     
     setLoadingHistory(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/conversations/${convId}`);
+      const response = await fetch(`${API_BASE_URL}/api/conversations/${convId}`);
       const data = await response.json();
       
       // Convert conversation messages to Chat messages
@@ -242,7 +243,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
           wsRef.current.close();
         }
         
-        const ws = new WebSocket(`ws://localhost:8000/ws/agent-responses/${sessionId}`);
+        const ws = new WebSocket(`${WS_BASE_URL}/ws/agent-responses/${sessionId}`);
         
         ws.onopen = () => {
           if (!isMounted) {
@@ -403,7 +404,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
 
     try {
       // Send message to Kafka via the ingress endpoint
-      const response = await fetch('http://localhost:8000/publish/ingress', {
+      const response = await fetch(`${API_BASE_URL}/publish/ingress`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
