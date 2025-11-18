@@ -186,6 +186,11 @@ dist/
 *.sqlite
 *.sqlite3
 
+# ChromaDB data directories
+chroma/
+backend/chroma/
+**/chroma/
+
 # PostgreSQL
 postgresql/
 
