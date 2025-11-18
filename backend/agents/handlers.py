@@ -41,7 +41,7 @@ from notifications import (
 from rag import query_rag
 
 "Session configuration (We'll change in the future for demonstration)"
-DEFAULT_SYSTEM_EMAIL = "support@agenticaistack.com"
+DEFAULT_SYSTEM_EMAIL = "agenticstack@commerceconductor.com"
 SESSION_EMAIL = os.getenv('USER_EMAIL', DEFAULT_SYSTEM_EMAIL)
 
 # Load LLM

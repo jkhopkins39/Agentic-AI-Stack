@@ -165,7 +165,6 @@ services:
       POSTGRES_PASSWORD: password123
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     ports:
       - "5433:5432"
     healthcheck:
@@ -173,8 +172,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # ===== REDIS =====
+  
+  # Redis (for session management and caching)
   redis:
     image: redis:7.4-alpine
     container_name: redis
@@ -183,14 +182,42 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+  
+  # Kafka (simplified configuration)
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ===== PYTHON BACKEND =====
-  # Change this section in docker-compose.yml
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  
+  # Zookeeper (for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+  # Python Backend
   backend:
     build:
       context: .
@@ -199,28 +226,27 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DB_HOST=AgenticAIStackDB
-      - DB_PORT=5432
-      - DB_NAME=AgenticAIStackDB
-      - DB_USER=AgenticAIStackDB
+      - DATABASE_URL=postgresql://postgres:password123@database:5432/agent_system
+      - REDIS_URL=redis://redis:6379
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - DB_PASSWORD=${DB_PASSWORD}  # Not hardcoded!
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}  # Not hardcoded!
-      - OPENAI_API_KEY=${OPENAI_API_KEY}  # Not hardcoded!
-      - SENDGRID_API_KEY=${SENDGRID_API_KEY} 
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MAILERSEND_API_KEY=${MAILERSEND_API_KEY}
+      - MAILERSEND_FROM_EMAIL=${MAILERSEND_FROM_EMAIL:-agenticstack@commerceconductor.com}
+      - MAILERSEND_FROM_NAME=${MAILERSEND_FROM_NAME:-Agentic AI Stack}
     volumes:
-      - ./:/app
-      - ./policy.txt:/app/policy.txt
+      - ./backend:/app
     depends_on:
       kafka:
         condition: service_healthy
       AgenticAIStackDB:
         condition: service_healthy
       redis:
+        condition: service_started
+      kafka:
         condition: service_healthy
-    command: python main.py
-
-  # ===== FRONTEND =====
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  # Updated Frontend for Vite
   frontend:
     image: node:20-alpine
     container_name: frontend
@@ -229,11 +255,11 @@ services:
       - ./frontend:/app
       - /app/node_modules
     ports:
-      - "5173:5173"
+      - "3000:5173"
     command: sh -c "npm install --legacy-peer-deps && npm run dev -- --host 0.0.0.0 --port 5173"
     environment:
       - CHOKIDAR_USEPOLLING=true
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://backend:8000
       - VITE_HOST=0.0.0.0
     depends_on:
       - backend
@@ -243,9 +269,5 @@ volumes:
   agenticai-pgdata:
   postgres_data:
   redis_data:
-  connect-plugins:
-
-networks:
-  default:
-    name: agentic-ai-network
-    driver: bridge
+  kafka_data:
+  zookeeper_data:

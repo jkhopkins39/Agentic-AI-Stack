@@ -1,0 +1,500 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Plus, Package, Truck, CheckCircle, RotateCcw, ArrowLeft, RefreshCw, AlertCircle, X } from 'lucide-react';
+import { useUser } from '../contexts/UserContext';
+import { API_BASE_URL } from '../config';
+
+type OrderStatus = 'pending' | 'in_transit' | 'delivered' | 'return_processing' | 'returned' | 'cancelled';
+
+interface Product {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  stock_quantity: number;
+}
+
+interface OrderItem {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+}
+
+export function Orders() {
+  const { userOrders, isLoadingOrders, ordersError, refreshOrders, currentUserEmail } = useUser();
+  const [showOrderForm, setShowOrderForm] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pendingAddItem = useRef(false);
+
+  // Load products when form is shown
+  useEffect(() => {
+    if (showOrderForm && products.length === 0) {
+      fetchProducts();
+    }
+  }, [showOrderForm]);
+
+  // Add first item when products are loaded and form is shown
+  useEffect(() => {
+    if (showOrderForm && products.length > 0 && orderItems.length === 0) {
+      setOrderItems([{
+        product_id: products[0].id,
+        product_name: products[0].name,
+        quantity: 1,
+        unit_price: products[0].price
+      }]);
+    }
+  }, [showOrderForm, products.length]);
+
+  // Handle pending add item when products load
+  useEffect(() => {
+    if (pendingAddItem.current && products.length > 0) {
+      setOrderItems(prevItems => [...prevItems, {
+        product_id: products[0].id,
+        product_name: products[0].name,
+        quantity: 1,
+        unit_price: products[0].price
+      }]);
+      pendingAddItem.current = false;
+    }
+  }, [products]);
+
+  const fetchProducts = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/products`);
+      const data = await response.json();
+      setProducts(data.products || []);
+    } catch (err) {
+      console.error('Error fetching products:', err);
+      setError('Failed to load products');
+    }
+  };
+
+  const handleNewOrder = () => {
+    setOrderItems([]);
+    setError(null);
+    setShowOrderForm(true);
+  };
+
+  const addOrderItem = async () => {
+    // If products aren't loaded yet, fetch them and mark that we want to add an item
+    if (products.length === 0) {
+      pendingAddItem.current = true;
+      await fetchProducts();
+      return;
+    }
+    
+    // Products are loaded, add item immediately
+    setOrderItems(prevItems => [...prevItems, {
+      product_id: products[0].id,
+      product_name: products[0].name,
+      quantity: 1,
+      unit_price: products[0].price
+    }]);
+  };
+
+  const removeOrderItem = (index: number) => {
+    setOrderItems(orderItems.filter((_, i) => i !== index));
+  };
+
+  const updateOrderItem = (index: number, field: keyof OrderItem, value: string | number) => {
+    const updated = [...orderItems];
+    if (field === 'product_id') {
+      const product = products.find(p => p.id === value);
+      if (product) {
+        updated[index] = {
+          ...updated[index],
+          product_id: product.id,
+          product_name: product.name,
+          unit_price: product.price
+        };
+      }
+    } else {
+      updated[index] = { ...updated[index], [field]: value };
+    }
+    setOrderItems(updated);
+  };
+
+  const calculateTotal = () => {
+    return orderItems.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+  };
+
+  const handleSubmitOrder = async () => {
+    if (!currentUserEmail) {
+      setError('User email not found');
+      return;
+    }
+
+    if (orderItems.length === 0) {
+      setError('Please add at least one item to the order');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_email: currentUserEmail,
+          items: orderItems.map(item => ({
+            product_id: item.product_id,
+            quantity: item.quantity,
+            unit_price: item.unit_price
+          })),
+          status: 'pending',
+          currency: 'USD'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to create order');
+      }
+
+      // Success - close form and refresh orders
+      setShowOrderForm(false);
+      setOrderItems([]);
+      refreshOrders();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create order');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'pending':
+        return <Package className="h-3 w-3" />;
+      case 'in_transit':
+        return <Truck className="h-3 w-3" />;
+      case 'delivered':
+        return <CheckCircle className="h-3 w-3" />;
+      case 'return_processing':
+        return <RotateCcw className="h-3 w-3" />;
+      case 'returned':
+        return <ArrowLeft className="h-3 w-3" />;
+      case 'cancelled':
+        return <ArrowLeft className="h-3 w-3" />;
+      default:
+        return <Package className="h-3 w-3" />;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'pending':
+        return 'bg-blue-100 text-blue-800';
+      case 'in_transit':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'delivered':
+        return 'bg-green-100 text-green-800';
+      case 'return_processing':
+        return 'bg-orange-100 text-orange-800';
+      case 'returned':
+        return 'bg-gray-100 text-gray-800';
+      case 'cancelled':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'pending':
+        return 'Pending';
+      case 'in_transit':
+        return 'In Transit';
+      case 'delivered':
+        return 'Delivered';
+      case 'return_processing':
+        return 'Return Processing';
+      case 'returned':
+        return 'Returned';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+  };
+
+
+  // Loading state
+  if (isLoadingOrders) {
+    return (
+      <div className="p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2>Your Orders</h2>
+          <RefreshCw className="h-4 w-4 animate-spin" />
+        </div>
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-32 bg-muted animate-pulse rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (ordersError) {
+    return (
+      <div className="p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2>Your Orders</h2>
+          <Button onClick={refreshOrders} size="sm" variant="outline">
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Retry
+          </Button>
+        </div>
+        <Card>
+          <CardContent className="flex items-center gap-2 p-6 text-destructive">
+            <AlertCircle className="h-5 w-5" />
+            <span>Failed to load orders: {ordersError}</span>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const orders = userOrders?.orders || [];
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2>Your Orders</h2>
+        <div className="flex gap-2">
+          <Button onClick={refreshOrders} size="sm" variant="outline" disabled={isLoadingOrders}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${isLoadingOrders ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <Button onClick={handleNewOrder} size="sm">
+            <Plus className="h-4 w-4 mr-2" />
+            New Order
+          </Button>
+        </div>
+      </div>
+
+      {userOrders && (
+        <div className="text-sm text-muted-foreground">
+          Showing {orders.length} of {userOrders.total_count} orders
+        </div>
+      )}
+
+      {orders.length === 0 && !showOrderForm && (
+        <div className="text-center text-muted-foreground py-8">
+          <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p>No orders found</p>
+          <Button onClick={handleNewOrder} className="mt-4">
+            <Plus className="h-4 w-4 mr-2" />
+            Place Your First Order
+          </Button>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {orders.map((order) => (
+          <Card key={order.id} className="p-3">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">{order.order_number}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {new Date(order.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <Badge className={getStatusColor(order.status)}>
+                  {getStatusIcon(order.status)}
+                  <span className="ml-1">{getStatusLabel(order.status)}</span>
+                </Badge>
+              </div>
+
+              <div>
+                <p className="text-sm text-muted-foreground mb-1">Items:</p>
+                <div className="space-y-1">
+                  {order.items.map((item, index) => (
+                    <p key={index} className="text-sm">
+                      • {item.product_name} (Qty: {item.quantity}) - ${item.total_price.toFixed(2)}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center pt-2 border-t">
+                <span className="text-sm text-muted-foreground">Total:</span>
+                <span className="font-medium">${order.total_amount.toFixed(2)} {order.currency}</span>
+              </div>
+
+              {/* Order dates */}
+              <div className="text-xs text-muted-foreground space-y-1">
+                {order.shipped_at && (
+                  <div>Shipped: {new Date(order.shipped_at).toLocaleDateString()}</div>
+                )}
+                {order.delivered_at && (
+                  <div>Delivered: {new Date(order.delivered_at).toLocaleDateString()}</div>
+                )}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Inline Order Form */}
+      {showOrderForm && (
+        <Card className="p-4 mt-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Create New Order</h3>
+              <Button
+                onClick={() => {
+                  setShowOrderForm(false);
+                  setOrderItems([]);
+                  setError(null);
+                }}
+                variant="ghost"
+                size="sm"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>Order Items</Label>
+                <Button onClick={addOrderItem} size="sm" variant="outline">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Item
+                </Button>
+              </div>
+
+              {orderItems.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground text-sm">
+                  No items added. Click "Add Item" to get started.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {orderItems.map((item, index) => (
+                    <Card key={index} className="p-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">Item {index + 1}</Label>
+                          {orderItems.length > 1 && (
+                            <Button
+                              onClick={() => removeOrderItem(index)}
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <div>
+                            <Label htmlFor={`product-${index}`} className="text-xs">Product</Label>
+                            <select
+                              id={`product-${index}`}
+                              value={item.product_id}
+                              onChange={(e) => updateOrderItem(index, 'product_id', e.target.value)}
+                              className="w-full mt-1 px-3 py-2 border rounded-md text-sm"
+                            >
+                              {products.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.name} - ${product.price.toFixed(2)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <Label htmlFor={`quantity-${index}`} className="text-xs">Quantity</Label>
+                              <Input
+                                id={`quantity-${index}`}
+                                type="number"
+                                min="1"
+                                value={item.quantity}
+                                onChange={(e) => updateOrderItem(index, 'quantity', parseInt(e.target.value) || 1)}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`price-${index}`} className="text-xs">Unit Price</Label>
+                              <Input
+                                id={`price-${index}`}
+                                type="number"
+                                step="0.01"
+                                value={item.unit_price.toFixed(2)}
+                                onChange={(e) => updateOrderItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                                className="mt-1"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="text-sm text-muted-foreground">
+                            Subtotal: ${(item.unit_price * item.quantity).toFixed(2)}
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {orderItems.length > 0 && (
+              <div className="pt-4 border-t">
+                <div className="flex justify-between items-center text-lg font-semibold">
+                  <span>Total:</span>
+                  <span>${calculateTotal().toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-4">
+              <Button
+                onClick={() => {
+                  setShowOrderForm(false);
+                  setOrderItems([]);
+                  setError(null);
+                }}
+                variant="outline"
+                disabled={isSubmitting}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSubmitOrder}
+                disabled={isSubmitting || orderItems.length === 0}
+                className="flex-1"
+              >
+                {isSubmitting ? 'Creating...' : 'Save Order'}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}

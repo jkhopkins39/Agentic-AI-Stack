@@ -13,8 +13,7 @@ READ THIS TO RUN IT
 - **Apache Kafka** for event streaming and message routing with priority queues
 - **PostgreSQL** for persistent data storage (users, orders, conversations)
 - **Redis** for session management and caching
-- **Debezium** for Change Data Capture (CDC)
-- **ksqlDB** for stream processing
+- **Apache Kafka** for event streaming and real-time processing
 
 ### Frontend Stack
 - **React 19** with TypeScript
@@ -25,13 +24,9 @@ READ THIS TO RUN IT
 ### Infrastructure
 - **Docker & Docker Compose** for containerized deployment
 - **Node.js 20** runtime environment
+- **Apache Kafka** with Zookeeper for event streaming
 
-## 🚀 Quick Start
-
-### Prerequisites
-- Docker and Docker Compose installed
-- Node.js 20+ and npm installed
-- Git installed
+## Quick Start
 
 ### 1. Clone the Repository
 ```bash
@@ -74,13 +69,37 @@ The setup script initializes Kafka topics, configures Debezium connectors, and s
 ### 4. Build and Start Backend
 
 ```bash
-docker-compose build backend
-docker-compose up backend
+# Start all services including Kafka
+docker-compose up -d
+
+# Wait for services to be ready, then setup Kafka topics
+# On Windows:
+.\setup-kafka-topics.ps1
+
+# On Linux/Mac:
+./setup-kafka-topics.sh
 ```
 
 **Note:** This will start all services including Kafka, PostgreSQL, Redis, and the backend API.
 
-The backend will be available at: **http://localhost:8000**
+### 4. Kafka Integration
+The system now includes **Apache Kafka** for event streaming:
+
+**Kafka Topics:**
+- `customer.query_events` - Customer queries and interactions
+- `commerce.order_events` - Order-related events and updates
+- `commerce.order_validation` - Order validation events
+- `customer.policy_queries` - Policy-related queries
+- `policy.order_events` - Policy and order cross-references
+- `agent.responses` - Agent response events
+- `system.events` - System-wide events
+
+**Event Tracking:**
+- Every user interaction gets a `correlation_id` for end-to-end tracking
+- All agent responses are published to Kafka topics
+- Events include priority levels (1=urgent, 2=high, 3=medium, 4=low)
+
+### 5. Frontend Setup (Local Development) in a separate terminal
 
 ### 5. Start Frontend (in a separate terminal)
 

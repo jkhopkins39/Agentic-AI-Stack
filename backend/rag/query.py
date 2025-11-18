@@ -2,9 +2,8 @@ import os
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores.chroma import Chroma
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 from .document_processor import generate_data_store, CHROMA_PATH
 
@@ -62,34 +61,32 @@ def query_rag(query_text):
         generate_data_store()
         db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
   
-    # This searches the chroma vector database for documents most similar to query_text. Limits it to top 3 results
-    results = db.similarity_search_with_relevance_scores(query_text, k=3)
+    # This searches the chroma vector database for documents most similar to query_text. Limits it to top 5 results
+    results = db.similarity_search_with_relevance_scores(query_text, k=5)
 
     # Enhanced handling for no results or low relevance scores
     if len(results) == 0:
+        print(f"⚠️ No results found in RAG database for query: {query_text}")
         return (
-            "I couldn't find specific information about your question in our policy documents. "
-            "Could you try rephrasing your question or ask about:\n"
-            "- Return policies and timeframes\n"
-            "- Shipping policies\n"
-            "- Exchange procedures\n"
-            "- Warranty information\n\n"
-            "Alternatively, feel free to contact our support team at support@agenticaistack.com for personalized assistance.",
+            "I couldn't find relevant policy information. Please contact customer support for assistance.",
             None
         )
     
-    # Check relevance scores
-    best_score = results[0][1]
-    if best_score < 0.7:
-        # Still provide an answer but acknowledge uncertainty
-        context_text = "\n\n - -\n\n".join([doc.page_content for doc, _score in results])
-        fallback_response = (
-            f"I found some potentially relevant information, but I'm not entirely confident it directly addresses your question. "
-            f"Here's what I found:\n\n"
-        )
-    else:
-        context_text = "\n\n - -\n\n".join([doc.page_content for doc, _score in results])
-        fallback_response = None
+    # Filter results by relevance score (lower threshold to include more context)
+    # Lower the threshold to 0.5 to get more context
+    filtered_results = [(doc, score) for doc, score in results if score >= 0.5]
+    
+    if len(filtered_results) == 0:
+        print(f"⚠️ All results below relevance threshold. Using all results anyway.")
+        filtered_results = results
+    
+    # Combine context from matching documents
+    context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+    
+    print(f"✓ Found {len(filtered_results)} relevant chunks for policy query")
+    print(f"Context preview: {context_text[:200]}...")
+    
+    fallback_response = None
  
     # Create prompt template using context and query text
     prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
@@ -107,15 +104,17 @@ def query_rag(query_text):
             None
         )
 
-    # Generate response text based on the prompt
-    response_text = model.predict(prompt)
+    # Generate response text based on the prompt (use invoke instead of deprecated predict)
+    messages = [{"role": "user", "content": prompt}]
+    response = model.invoke(messages)
+    response_text = response.content if hasattr(response, 'content') else str(response)
  
     # Prepend fallback message if relevance was low
     if fallback_response:
         response_text = fallback_response + response_text + "\n\nIf this doesn't fully answer your question, please contact support@agenticaistack.com for more specific help."
  
     # Get sources of the matching documents
-    sources = [doc.metadata.get("source", None) for doc, _score in results]
+    sources = [doc.metadata.get("source", None) for doc, _score in filtered_results]
  
     # Format and return response including generated text and sources
     formatted_response = f"Response: {response_text}\nSources: {sources}"
