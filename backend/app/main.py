@@ -422,11 +422,19 @@ async def lifespan(app: FastAPI):
     print("✓ Kafka producer started")
         
     # Start orchestrator consumer
-    asyncio.create_task(orchestrator_consumer())
+    try:
+        asyncio.create_task(orchestrator_consumer())
+        print("✓ Orchestrator consumer task created")
+    except Exception as e:
+        print(f"✗ Failed to start orchestrator consumer: {e}")
         
     # Start priority consumers
-    priority_consumer = PriorityConsumer()
-    asyncio.create_task(priority_consumer.start())
+    try:
+        priority_consumer = PriorityConsumer()
+        asyncio.create_task(priority_consumer.start())
+        print("✓ Priority consumers task created")
+    except Exception as e:
+        print(f"✗ Failed to start priority consumers: {e}")
         
     yield
         
@@ -1934,13 +1942,23 @@ async def orchestrator_consumer():
         **kafka_config
     )
     
-    await consumer.start()
-    print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
+    try:
+        await consumer.start()
+        print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
+    except Exception as e:
+        print(f"✗ Orchestrator consumer failed to start: {e}")
+        return
 
-# Wait for partition assignment
+    # Wait for partition assignment
+    max_wait = 30  # Wait up to 30 seconds
+    waited = 0
     while not consumer.assignment():
+        if waited >= max_wait:
+            print(f"⚠️ Orchestrator consumer timeout waiting for partition assignment after {max_wait}s")
+            return
         print("⏳ Waiting for partition assignment...")
         await asyncio.sleep(0.5)
+        waited += 0.5
 
     print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
 

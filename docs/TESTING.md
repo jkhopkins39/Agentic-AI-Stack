@@ -268,6 +268,26 @@ chmod +x test_backend.sh
 
 **Quick Fix**: Use `*` as resource name to grant permissions to all topics at once.
 
+### GroupAuthorizationFailedError
+**Error**: `GroupAuthorizationFailedError: ws-test-session-123` (or similar consumer group names)
+
+**Fix**: Your API key needs consumer group permissions. In Confluent Cloud:
+1. Go to **Security** → **API Keys** → Select your API key
+2. Click **"Edit ACLs"** or **"Manage ACLs"**
+3. Add consumer group ACL:
+   - **Resource Type**: Group
+   - **Resource Name**: `*` (wildcard for all consumer groups)
+   - **Pattern Type**: Literal (or Prefixed, both work with `*`)
+   - **Operation**: READ, DESCRIBE
+   - **Permission**: ALLOW
+
+**Why**: Your application creates consumer groups dynamically:
+- `ws-{session_id}` - For WebSocket consumers
+- `orchestrator-group-v2` - For orchestrator
+- `{agent_type}-agent-group-v2` - For priority agents (order-agent-group-v2, email-agent-group-v2, etc.)
+
+**Quick Fix**: Grant READ and DESCRIBE on `*` (all groups) to allow any consumer group.
+
 ### No Agent Responses
 - Check Render logs for agent consumer messages
 - Verify agents are processing messages
