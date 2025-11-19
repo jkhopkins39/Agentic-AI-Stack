@@ -148,12 +148,12 @@ def get_kafka_config():
             print("⚠️ WARNING: KAFKA_SASL_USERNAME or KAFKA_SASL_PASSWORD not set!")
             print(f"   KAFKA_SASL_USERNAME: {'SET' if KAFKA_SASL_USERNAME else 'NOT SET'}")
             print(f"   KAFKA_SASL_PASSWORD: {'SET' if KAFKA_SASL_PASSWORD else 'NOT SET'}")
-        # aiokafka uses sasl_username and sasl_password (not sasl_plain_username)
+        # aiokafka uses sasl_plain_username and sasl_plain_password
         config.update({
             'security_protocol': 'SASL_SSL',
             'sasl_mechanism': KAFKA_SASL_MECHANISM,
-            'sasl_username': KAFKA_SASL_USERNAME,
-            'sasl_password': KAFKA_SASL_PASSWORD,
+            'sasl_plain_username': KAFKA_SASL_USERNAME,
+            'sasl_plain_password': KAFKA_SASL_PASSWORD,
             # Additional SSL settings for Confluent Cloud
             'ssl_check_hostname': True,
         })
