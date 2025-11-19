@@ -1734,31 +1734,68 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",  # ✅ Change back to latest
         enable_auto_commit=True,
-        session_timeout_ms=30000,  # Increased to 30s to handle email operations
+        session_timeout_ms=60000,  # Increased to 60s
         request_timeout_ms=30000,
+        heartbeat_interval_ms=10000,  # Send heartbeat every 10s to keep connection alive
         **kafka_config
     )
     
     await consumer.start()
     
+    # Send initial connection confirmation
+    await websocket.send_json({
+        "type": "connection",
+        "status": "connected",
+        "session_id": session_id,
+        "message": "WebSocket connected, waiting for agent responses..."
+    })
+    
     # ✅ Add timestamp filter here too
     try:
-        async for message in consumer:
-            event = message.value
-            
-            # Only send messages from the last 10 seconds (prevents old duplicates)
-            event_time = event.get("timestamp", 0)
-            if time.time() * 1000 - event_time > 10000:
-                continue
+        # Use getmany with timeout to allow periodic keepalive checks
+        while True:
+            try:
+                # Poll for messages with timeout
+                messages = await consumer.getmany(timeout_ms=5000, max_records=10)
                 
-            if event.get("session_id") == session_id:
-                await websocket.send_json(event)
-                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+                if messages:
+                    for topic_partition, msgs in messages.items():
+                        for message in msgs:
+                            event = message.value
+                            
+                            # Only send messages from the last 10 seconds (prevents old duplicates)
+                            event_time = event.get("timestamp", 0)
+                            if time.time() * 1000 - event_time > 10000:
+                                continue
+                                
+                            if event.get("session_id") == session_id:
+                                await websocket.send_json(event)
+                                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+                
+                # Send keepalive ping every 30 seconds
+                await asyncio.sleep(0.1)  # Small delay to prevent tight loop
+                
+            except asyncio.TimeoutError:
+                # Timeout is expected when no messages - send keepalive
+                try:
+                    await websocket.send_json({
+                        "type": "keepalive",
+                        "timestamp": int(time.time() * 1000)
+                    })
+                except:
+                    # Connection closed, break out
+                    break
+                    
+    except WebSocketDisconnect:
+        print(f"✗ WebSocket client disconnected: {session_id}")
     except Exception as e:
         print(f"✗ WebSocket consumer error: {e}")
     finally:
         await consumer.stop()
-        await websocket.close()
+        try:
+            await websocket.close()
+        except:
+            pass
         print(f"✗ WebSocket disconnected: {session_id}")
 
 # Authentication Endpoint
