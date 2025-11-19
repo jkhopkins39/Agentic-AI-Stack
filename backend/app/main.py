@@ -129,6 +129,41 @@ load_dotenv()
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
 VERBOSE_CONSUMER_LOGS = os.getenv("VERBOSE_CONSUMER_LOGS", "false").lower() in {"1", "true", "yes", "on"}
 
+# Confluent Cloud SASL_SSL configuration
+KAFKA_SECURITY_PROTOCOL = os.getenv('KAFKA_SECURITY_PROTOCOL', 'PLAINTEXT')  # PLAINTEXT for local, SASL_SSL for Confluent Cloud
+KAFKA_SASL_MECHANISM = os.getenv('KAFKA_SASL_MECHANISM', 'PLAIN')
+KAFKA_SASL_USERNAME = os.getenv('KAFKA_SASL_USERNAME', '')
+KAFKA_SASL_PASSWORD = os.getenv('KAFKA_SASL_PASSWORD', '')
+
+def get_kafka_config():
+    """Get Kafka configuration with optional SASL_SSL support for Confluent Cloud"""
+    config = {
+        'bootstrap_servers': KAFKA_BOOTSTRAP_SERVERS,
+    }
+    
+    # Add SASL_SSL config if using Confluent Cloud
+    if KAFKA_SECURITY_PROTOCOL == 'SASL_SSL':
+        # Verify credentials are set
+        if not KAFKA_SASL_USERNAME or not KAFKA_SASL_PASSWORD:
+            print("⚠️ WARNING: KAFKA_SASL_USERNAME or KAFKA_SASL_PASSWORD not set!")
+            print(f"   KAFKA_SASL_USERNAME: {'SET' if KAFKA_SASL_USERNAME else 'NOT SET'}")
+            print(f"   KAFKA_SASL_PASSWORD: {'SET' if KAFKA_SASL_PASSWORD else 'NOT SET'}")
+        # aiokafka uses sasl_username and sasl_password (not sasl_plain_username)
+        config.update({
+            'security_protocol': 'SASL_SSL',
+            'sasl_mechanism': KAFKA_SASL_MECHANISM,
+            'sasl_username': KAFKA_SASL_USERNAME,
+            'sasl_password': KAFKA_SASL_PASSWORD,
+            # Additional SSL settings for Confluent Cloud
+            'ssl_check_hostname': True,
+        })
+        print(f"✓ Using SASL_SSL for Kafka (bootstrap: {KAFKA_BOOTSTRAP_SERVERS[0]})")
+        print(f"   Username: {KAFKA_SASL_USERNAME[:10]}..." if KAFKA_SASL_USERNAME else "   Username: NOT SET")
+    else:
+        print(f"✓ Using PLAINTEXT for Kafka (bootstrap: {KAFKA_BOOTSTRAP_SERVERS[0]})")
+    
+    return config
+
 
 def verbose_polling_log(message: str) -> None:
     """Emit noisy consumer/orchestrator logs only when explicitly enabled."""
@@ -176,15 +211,16 @@ class PriorityConsumer:
         # Create consumers for all priority levels
         consumers = {}
         for i, topic in enumerate(topics, start=1):
+            kafka_config = get_kafka_config()
             consumer = AIOKafkaConsumer(
                 topic,
-                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
                 group_id=f"{agent_type.lower()}-agent-group-v2",
                 value_deserializer=lambda m: json.loads(m.decode("utf-8")),
                 auto_offset_reset="earliest",
                 enable_auto_commit=False,
                 session_timeout_ms=30000,  # Increased to 30s to handle email operations
-                request_timeout_ms=30000
+                request_timeout_ms=30000,
+                **kafka_config
             )
             await consumer.start()
             
@@ -371,10 +407,11 @@ async def lifespan(app: FastAPI):
         
         # Startup
     ensure_default_users()
+    kafka_config = get_kafka_config()
     producer = AIOKafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        key_serializer=lambda v: v.encode("utf-8") if v else None
+        key_serializer=lambda v: v.encode("utf-8") if v else None,
+        **kafka_config
     )
     await producer.start()
     print("✓ Kafka producer started")
@@ -1685,15 +1722,16 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
     await websocket.accept()
     print(f"✓ WebSocket connected: {session_id}")
     
+    kafka_config = get_kafka_config()
     consumer = AIOKafkaConsumer(
         RESPONSE_TOPIC,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id=f"ws-{session_id}",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",  # ✅ Change back to latest
         enable_auto_commit=True,
         session_timeout_ms=30000,  # Increased to 30s to handle email operations
-        request_timeout_ms=30000
+        request_timeout_ms=30000,
+        **kafka_config
     )
     
     await consumer.start()
@@ -1843,14 +1881,15 @@ async def orchestrator_consumer():
     2. Classifies and routes to priority topics
     3. Does NOT call agents directly
     """
+    kafka_config = get_kafka_config()
     consumer = AIOKafkaConsumer(
         INGRESS_TOPIC,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id="orchestrator-group-v2",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="earliest",
         session_timeout_ms=30000,  # Increased to 30s to handle email operations
-        request_timeout_ms=30000
+        request_timeout_ms=30000,
+        **kafka_config
     )
     
     await consumer.start()
