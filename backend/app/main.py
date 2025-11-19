@@ -7,6 +7,7 @@ import json # For JSON operations
 import re # For regex pattern matching
 import time
 import asyncio
+import ssl # For SSL context in Kafka SASL_SSL connections
 from typing import Tuple
 import concurrent.futures
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -149,11 +150,17 @@ def get_kafka_config():
             print(f"   KAFKA_SASL_USERNAME: {'SET' if KAFKA_SASL_USERNAME else 'NOT SET'}")
             print(f"   KAFKA_SASL_PASSWORD: {'SET' if KAFKA_SASL_PASSWORD else 'NOT SET'}")
         # aiokafka uses sasl_plain_username and sasl_plain_password
+        # Create SSL context for Confluent Cloud (required for SASL_SSL)
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = True
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        
         config.update({
             'security_protocol': 'SASL_SSL',
             'sasl_mechanism': KAFKA_SASL_MECHANISM,
             'sasl_plain_username': KAFKA_SASL_USERNAME,
             'sasl_plain_password': KAFKA_SASL_PASSWORD,
+            'ssl_context': ssl_context,
         })
         print(f"✓ Using SASL_SSL for Kafka (bootstrap: {KAFKA_BOOTSTRAP_SERVERS[0]})")
         print(f"   Username: {KAFKA_SASL_USERNAME[:10]}..." if KAFKA_SASL_USERNAME else "   Username: NOT SET")
