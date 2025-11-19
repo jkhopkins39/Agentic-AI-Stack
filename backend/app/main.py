@@ -154,8 +154,6 @@ def get_kafka_config():
             'sasl_mechanism': KAFKA_SASL_MECHANISM,
             'sasl_plain_username': KAFKA_SASL_USERNAME,
             'sasl_plain_password': KAFKA_SASL_PASSWORD,
-            # Additional SSL settings for Confluent Cloud
-            'ssl_check_hostname': True,
         })
         print(f"✓ Using SASL_SSL for Kafka (bootstrap: {KAFKA_BOOTSTRAP_SERVERS[0]})")
         print(f"   Username: {KAFKA_SASL_USERNAME[:10]}..." if KAFKA_SASL_USERNAME else "   Username: NOT SET")
