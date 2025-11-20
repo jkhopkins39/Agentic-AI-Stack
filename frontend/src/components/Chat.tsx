@@ -287,27 +287,10 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
               return;
             }
             
-            // Update conversation_id if provided
-            // This happens when a WebSocket response includes a conversation_id for a new conversation
-            if (data.conversation_id) {
-              if (!conversationId) {
-                // Update the ref BEFORE setting conversationId to prevent history reload
-                // This ensures we don't clear the current messages when conversationId is set
-                if (messagesRef.current.length > 0) {
-                  lastLoadedConversationRef.current = data.conversation_id;
-                  prevConversationIdRef.current = undefined;
-                }
-                skipNextHistoryLoadRef.current = true;
-                setConversationId(data.conversation_id);
-                if (onConversationCreated) {
-                  onConversationCreated(data.conversation_id, sessionId);
-                }
-              }
-              return; // Don't process connection messages as chat messages
-            }
-            
-            // Update conversation_id if provided in regular messages
+            // Update conversation_id if provided in the message
             if (data.conversation_id && !conversationId) {
+              // Update the ref BEFORE setting conversationId to prevent history reload
+              // This ensures we don't clear the current messages when conversationId is set
               if (messagesRef.current.length > 0) {
                 lastLoadedConversationRef.current = data.conversation_id;
                 prevConversationIdRef.current = undefined;

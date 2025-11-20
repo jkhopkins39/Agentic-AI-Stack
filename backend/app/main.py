@@ -1749,6 +1749,9 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
     )
     
     await consumer.start()
+    # Give consumer a moment to fully subscribe
+    await asyncio.sleep(0.5)
+    print(f"✓ Kafka consumer started for session {session_id}")
     
     # Send initial connection confirmation
     await websocket.send_json({
@@ -1766,18 +1769,29 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
                 messages = await consumer.getmany(timeout_ms=5000, max_records=10)
                 
                 if messages:
+                    print(f"📥 Received {sum(len(msgs) for msgs in messages.values())} message(s) from Kafka for session {session_id}")
                     for topic_partition, msgs in messages.items():
                         for message in msgs:
                             event = message.value
                             
-                            # Only send messages from the last 10 seconds (prevents old duplicates)
-                            event_time = event.get("timestamp", 0)
-                            if time.time() * 1000 - event_time > 10000:
+                            # Check session_id first (more efficient)
+                            if event.get("session_id") != session_id:
                                 continue
-                                
-                            if event.get("session_id") == session_id:
-                                await websocket.send_json(event)
-                                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+                            
+                            # Only send messages from the last 60 seconds (prevents old duplicates)
+                            # Increased from 10s to 60s to account for processing delays
+                            event_time = event.get("timestamp", 0)
+                            current_time = int(time.time() * 1000)
+                            time_diff = current_time - event_time
+                            
+                            if time_diff > 60000:  # 60 seconds
+                                print(f"⚠️ Skipping old message for {session_id}: {time_diff}ms old")
+                                continue
+                            
+                            # Log the message being sent
+                            print(f"📤 Sending message to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')} - {time_diff}ms old")
+                            await websocket.send_json(event)
+                            print(f"✓ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
                 
                 # Send keepalive ping every 30 seconds
                 await asyncio.sleep(0.1)  # Small delay to prevent tight loop
