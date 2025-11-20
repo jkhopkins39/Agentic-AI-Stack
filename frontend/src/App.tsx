@@ -5,8 +5,6 @@ import { Chat } from './components/Chat';
 import { ChatHistory } from './components/ChatHistory';
 import { Login } from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
-import { Button } from './components/ui/button';
-import { MessageSquare, Settings } from 'lucide-react';
 
 function AppContent() {
   const [isChatHistoryOpen, setIsChatHistoryOpen] = useState(false);
@@ -61,6 +59,9 @@ function AppContent() {
           setChatHistoryRefresh(prev => prev + 1);
         }}
         chatHistoryRefresh={chatHistoryRefresh}
+        isAdmin={isAdmin}
+        onAdminToggle={() => setCurrentView(currentView === 'chat' ? 'admin' : 'chat')}
+        currentView={currentView}
       >
         <div className="relative h-full">
           {currentView === 'chat' ? (
@@ -84,21 +85,6 @@ function AppContent() {
           ) : (
             <AdminDashboard />
           )}
-          
-          {/* Navigation Buttons */}
-          {isAdmin && (
-            <div className="fixed top-4 right-4 z-40">
-              <Button
-                onClick={() => setCurrentView(currentView === 'chat' ? 'admin' : 'chat')}
-                variant={currentView === 'admin' ? 'default' : 'outline'}
-                size="sm"
-              >
-                <Settings className="h-4 w-4 mr-2" />
-                {currentView === 'chat' ? 'Admin' : 'Chat'}
-              </Button>
-            </div>
-          )}
-          
         </div>
       </CustomerSidebar>
     </div>

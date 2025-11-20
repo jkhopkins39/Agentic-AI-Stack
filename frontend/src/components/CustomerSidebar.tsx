@@ -24,7 +24,8 @@ import {
   User, 
   MessageSquare,
   LogOut,
-  PanelRightOpen
+  PanelRightOpen,
+  Settings
 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
 import { cn } from './ui/utils';
@@ -74,6 +75,9 @@ interface CustomerSidebarProps {
   onSelectConversation?: (conversationId: string, sessionId: string) => void;
   onNewChat?: () => void;
   chatHistoryRefresh?: number;
+  isAdmin?: boolean;
+  onAdminToggle?: () => void;
+  currentView?: 'chat' | 'admin';
 }
 
 export function CustomerSidebar({ 
@@ -84,7 +88,10 @@ export function CustomerSidebar({
   selectedSessionId,
   onSelectConversation,
   onNewChat,
-  chatHistoryRefresh
+  chatHistoryRefresh,
+  isAdmin = false,
+  onAdminToggle,
+  currentView = 'chat'
 }: CustomerSidebarProps) {
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [accountSidebarOpen, setAccountSidebarOpen] = useState(true);
@@ -215,7 +222,23 @@ export function CustomerSidebar({
                 <AccountSidebarTriggerComponent onToggle={() => setAccountSidebarOpen(!accountSidebarOpen)} />
                 <h1 className="text-xl font-semibold">Capgemini Agent Stack</h1>
               </div>
-              <ChatHistorySidebarTriggerComponent />
+              <div className="flex items-center gap-2">
+                {isAdmin && onAdminToggle && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shadow-md"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAdminToggle();
+                    }}
+                  >
+                    <Settings className="h-4 w-4 mr-2" />
+                    {currentView === 'admin' ? 'Chat' : 'Admin'}
+                  </Button>
+                )}
+                <ChatHistorySidebarTriggerComponent />
+              </div>
             </div>
             </div>
             <div className="flex-1">
