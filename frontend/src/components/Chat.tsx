@@ -231,7 +231,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
 
   // WebSocket connection for real-time responses
   useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout | null = null;
+    let reconnectTimeout: number | null = null;
     let isMounted = true;
     
     const connectWebSocket = () => {
@@ -260,6 +260,11 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
           try {
             const data = JSON.parse(event.data);
             console.log('Received WebSocket message:', data);
+            
+            // Skip connection confirmation and keepalive messages - these should not be displayed as chat messages
+            if (data.status === 'connected' || data.type === 'keepalive') {
+              return;
+            }
             
             // Update conversation_id if provided
             // This happens when a WebSocket response includes a conversation_id for a new conversation
