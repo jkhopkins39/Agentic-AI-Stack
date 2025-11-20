@@ -7,6 +7,7 @@ import json # For JSON operations
 import re # For regex pattern matching
 import time
 import asyncio
+import ssl # For SSL context in Kafka SASL_SSL connections
 from typing import Tuple
 import concurrent.futures
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -129,6 +130,45 @@ load_dotenv()
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
 VERBOSE_CONSUMER_LOGS = os.getenv("VERBOSE_CONSUMER_LOGS", "false").lower() in {"1", "true", "yes", "on"}
 
+# Confluent Cloud SASL_SSL configuration
+KAFKA_SECURITY_PROTOCOL = os.getenv('KAFKA_SECURITY_PROTOCOL', 'PLAINTEXT')  # PLAINTEXT for local, SASL_SSL for Confluent Cloud
+KAFKA_SASL_MECHANISM = os.getenv('KAFKA_SASL_MECHANISM', 'PLAIN')
+KAFKA_SASL_USERNAME = os.getenv('KAFKA_SASL_USERNAME', '')
+KAFKA_SASL_PASSWORD = os.getenv('KAFKA_SASL_PASSWORD', '')
+
+def get_kafka_config():
+    """Get Kafka configuration with optional SASL_SSL support for Confluent Cloud"""
+    config = {
+        'bootstrap_servers': KAFKA_BOOTSTRAP_SERVERS,
+    }
+    
+    # Add SASL_SSL config if using Confluent Cloud
+    if KAFKA_SECURITY_PROTOCOL == 'SASL_SSL':
+        # Verify credentials are set
+        if not KAFKA_SASL_USERNAME or not KAFKA_SASL_PASSWORD:
+            print("⚠️ WARNING: KAFKA_SASL_USERNAME or KAFKA_SASL_PASSWORD not set!")
+            print(f"   KAFKA_SASL_USERNAME: {'SET' if KAFKA_SASL_USERNAME else 'NOT SET'}")
+            print(f"   KAFKA_SASL_PASSWORD: {'SET' if KAFKA_SASL_PASSWORD else 'NOT SET'}")
+        # aiokafka uses sasl_plain_username and sasl_plain_password
+        # Create SSL context for Confluent Cloud (required for SASL_SSL)
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = True
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        
+        config.update({
+            'security_protocol': 'SASL_SSL',
+            'sasl_mechanism': KAFKA_SASL_MECHANISM,
+            'sasl_plain_username': KAFKA_SASL_USERNAME,
+            'sasl_plain_password': KAFKA_SASL_PASSWORD,
+            'ssl_context': ssl_context,
+        })
+        print(f"✓ Using SASL_SSL for Kafka (bootstrap: {KAFKA_BOOTSTRAP_SERVERS[0]})")
+        print(f"   Username: {KAFKA_SASL_USERNAME[:10]}..." if KAFKA_SASL_USERNAME else "   Username: NOT SET")
+    else:
+        print(f"✓ Using PLAINTEXT for Kafka (bootstrap: {KAFKA_BOOTSTRAP_SERVERS[0]})")
+    
+    return config
+
 
 def verbose_polling_log(message: str) -> None:
     """Emit noisy consumer/orchestrator logs only when explicitly enabled."""
@@ -176,15 +216,16 @@ class PriorityConsumer:
         # Create consumers for all priority levels
         consumers = {}
         for i, topic in enumerate(topics, start=1):
+            kafka_config = get_kafka_config()
             consumer = AIOKafkaConsumer(
                 topic,
-                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
                 group_id=f"{agent_type.lower()}-agent-group-v2",
                 value_deserializer=lambda m: json.loads(m.decode("utf-8")),
                 auto_offset_reset="earliest",
                 enable_auto_commit=False,
                 session_timeout_ms=30000,  # Increased to 30s to handle email operations
-                request_timeout_ms=30000
+                request_timeout_ms=30000,
+                **kafka_config
             )
             await consumer.start()
             
@@ -371,20 +412,29 @@ async def lifespan(app: FastAPI):
         
         # Startup
     ensure_default_users()
+    kafka_config = get_kafka_config()
     producer = AIOKafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        key_serializer=lambda v: v.encode("utf-8") if v else None
+        key_serializer=lambda v: v.encode("utf-8") if v else None,
+        **kafka_config
     )
     await producer.start()
     print("✓ Kafka producer started")
         
     # Start orchestrator consumer
-    asyncio.create_task(orchestrator_consumer())
+    try:
+        asyncio.create_task(orchestrator_consumer())
+        print("✓ Orchestrator consumer task created")
+    except Exception as e:
+        print(f"✗ Failed to start orchestrator consumer: {e}")
         
     # Start priority consumers
-    priority_consumer = PriorityConsumer()
-    asyncio.create_task(priority_consumer.start())
+    try:
+        priority_consumer = PriorityConsumer()
+        asyncio.create_task(priority_consumer.start())
+        print("✓ Priority consumers task created")
+    except Exception as e:
+        print(f"✗ Failed to start priority consumers: {e}")
         
     yield
         
@@ -1685,37 +1735,74 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
     await websocket.accept()
     print(f"✓ WebSocket connected: {session_id}")
     
+    kafka_config = get_kafka_config()
     consumer = AIOKafkaConsumer(
         RESPONSE_TOPIC,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id=f"ws-{session_id}",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",  # ✅ Change back to latest
         enable_auto_commit=True,
-        session_timeout_ms=30000,  # Increased to 30s to handle email operations
-        request_timeout_ms=30000
+        session_timeout_ms=60000,  # Increased to 60s
+        request_timeout_ms=30000,
+        heartbeat_interval_ms=10000,  # Send heartbeat every 10s to keep connection alive
+        **kafka_config
     )
     
     await consumer.start()
     
+    # Send initial connection confirmation
+    await websocket.send_json({
+        "type": "connection",
+        "status": "connected",
+        "session_id": session_id,
+    })
+    
     # ✅ Add timestamp filter here too
     try:
-        async for message in consumer:
-            event = message.value
-            
-            # Only send messages from the last 10 seconds (prevents old duplicates)
-            event_time = event.get("timestamp", 0)
-            if time.time() * 1000 - event_time > 10000:
-                continue
+        # Use getmany with timeout to allow periodic keepalive checks
+        while True:
+            try:
+                # Poll for messages with timeout
+                messages = await consumer.getmany(timeout_ms=5000, max_records=10)
                 
-            if event.get("session_id") == session_id:
-                await websocket.send_json(event)
-                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+                if messages:
+                    for topic_partition, msgs in messages.items():
+                        for message in msgs:
+                            event = message.value
+                            
+                            # Only send messages from the last 10 seconds (prevents old duplicates)
+                            event_time = event.get("timestamp", 0)
+                            if time.time() * 1000 - event_time > 10000:
+                                continue
+                                
+                            if event.get("session_id") == session_id:
+                                await websocket.send_json(event)
+                                print(f"→ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
+                
+                # Send keepalive ping every 30 seconds
+                await asyncio.sleep(0.1)  # Small delay to prevent tight loop
+                
+            except asyncio.TimeoutError:
+                # Timeout is expected when no messages - send keepalive
+                try:
+                    await websocket.send_json({
+                        "type": "keepalive",
+                        "timestamp": int(time.time() * 1000)
+                    })
+                except:
+                    # Connection closed, break out
+                    break
+                    
+    except WebSocketDisconnect:
+        print(f"✗ WebSocket client disconnected: {session_id}")
     except Exception as e:
         print(f"✗ WebSocket consumer error: {e}")
     finally:
         await consumer.stop()
-        await websocket.close()
+        try:
+            await websocket.close()
+        except:
+            pass
         print(f"✗ WebSocket disconnected: {session_id}")
 
 # Authentication Endpoint
@@ -1843,23 +1930,34 @@ async def orchestrator_consumer():
     2. Classifies and routes to priority topics
     3. Does NOT call agents directly
     """
+    kafka_config = get_kafka_config()
     consumer = AIOKafkaConsumer(
         INGRESS_TOPIC,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id="orchestrator-group-v2",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="earliest",
         session_timeout_ms=30000,  # Increased to 30s to handle email operations
-        request_timeout_ms=30000
+        request_timeout_ms=30000,
+        **kafka_config
     )
     
-    await consumer.start()
-    print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
+    try:
+        await consumer.start()
+        print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
+    except Exception as e:
+        print(f"✗ Orchestrator consumer failed to start: {e}")
+        return
 
-# Wait for partition assignment
+    # Wait for partition assignment
+    max_wait = 30  # Wait up to 30 seconds
+    waited = 0
     while not consumer.assignment():
+        if waited >= max_wait:
+            print(f"⚠️ Orchestrator consumer timeout waiting for partition assignment after {max_wait}s")
+            return
         print("⏳ Waiting for partition assignment...")
         await asyncio.sleep(0.5)
+        waited += 0.5
 
     print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
 

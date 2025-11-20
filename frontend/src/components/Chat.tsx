@@ -231,7 +231,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
 
   // WebSocket connection for real-time responses
   useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout | null = null;
+    let reconnectTimeout: number | null = null;
     let isMounted = true;
     
     const connectWebSocket = () => {
@@ -252,6 +252,22 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
           }
           console.log('WebSocket connected');
           setIsConnected(true);
+          
+          // Add greeting message on first connection if no messages exist
+          setMessages(prev => {
+            if (prev.length === 0) {
+              const greetingMessage: Message = {
+                id: `greeting-${Date.now()}`,
+                content: 'Hello! How can I help you?',
+                status: 'fulfilled',
+                timestamp: new Date(),
+                isUser: false,
+                agentType: 'Orchestrator'
+              };
+              return [greetingMessage];
+            }
+            return prev;
+          });
         };
 
         ws.onmessage = (event) => {
@@ -261,10 +277,22 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
             const data = JSON.parse(event.data);
             console.log('Received WebSocket message:', data);
             
-            // Ignore connection status messages - don't display them to the user
-            if (data.type === 'connection' || data.status === 'connected') {
-              // Handle conversation_id if provided in connection message
-              if (data.conversation_id && !conversationId) {
+            // Skip connection confirmation and keepalive messages - these should not be displayed as chat messages
+            if (data.status === 'connected' || data.type === 'keepalive') {
+              return;
+            }
+            
+            // Only process messages that have actual content - skip empty or default messages
+            if (!data.message || data.message.trim() === '' || data.message === 'Response received') {
+              return;
+            }
+            
+            // Update conversation_id if provided
+            // This happens when a WebSocket response includes a conversation_id for a new conversation
+            if (data.conversation_id) {
+              if (!conversationId) {
+                // Update the ref BEFORE setting conversationId to prevent history reload
+                // This ensures we don't clear the current messages when conversationId is set
                 if (messagesRef.current.length > 0) {
                   lastLoadedConversationRef.current = data.conversation_id;
                   prevConversationIdRef.current = undefined;
@@ -301,7 +329,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
               // Create a unique message ID based on content, timestamp, and agent type
               // Use correlation_id if available, otherwise create one
               const messageId = data.correlation_id || `msg-${Date.now()}-${Math.random()}`;
-              const messageContent = data.message || 'Response received';
+              const messageContent = data.message;
               
               // Check if we've already received this exact message (prevent duplicates)
               if (receivedMessageIds.current.has(messageId)) {
