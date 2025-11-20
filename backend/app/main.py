@@ -229,9 +229,9 @@ class PriorityConsumer:
             )
             await consumer.start()
             
-            # Wait for assignment
+            # Wait for assignment (reduced delay for faster startup)
             while not consumer.assignment():
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)  # Reduced from 0.5s to 0.1s
             
     
             consumers[i] = consumer
@@ -338,32 +338,7 @@ class PriorityConsumer:
                         conversation_id = event.get("conversation_id")
                         query_text = event.get("query_text", state.get("messages", [{}])[0].get("content", "") if state.get("messages") else "")
 
-                        # Save query and response to conversation
-                        if conversation_id and query_text:
-                            try:
-                                conn = get_database_connection()
-                                if conn:
-                                    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                                        cursor.execute(
-                                            "SELECT COUNT(*) as count FROM queries WHERE conversation_id = %s",
-                                            (conversation_id,)
-                                        )
-                                        result_count = cursor.fetchone()
-                                        message_order = (result_count['count'] if result_count else 0) + 1
-
-                                    save_query_to_conversation(
-                                        conversation_id=conversation_id,
-                                        user_message=query_text,
-                                        agent_type=agent_type,
-                                        agent_response=agent_response,
-                                        message_order=message_order,
-                                        user_id=state.get("user_data", {}).get("id") if isinstance(state.get("user_data"), dict) else None
-                                    )
-                                    print(f"→ Saved message to conversation {conversation_id}")
-                            except Exception as save_error:
-                                print(f"⚠️ Error saving to conversation: {save_error}")
-                        
-                        # Publish response to agent.responses
+                        # Publish response to agent.responses FIRST (non-blocking for user experience)
                         response_event = {
                             "session_id": session_id,
                             "conversation_id": conversation_id,
@@ -375,13 +350,42 @@ class PriorityConsumer:
                             "correlation_id": event.get("correlation_id", f"corr-{uuid.uuid4()}")
                         }
                         
-                        await producer.send_and_wait(
-                            RESPONSE_TOPIC,
-                            value=response_event,
-                            key=session_id
+                        # Publish response immediately (non-blocking for faster user experience)
+                        # Use create_task to send without blocking the main flow
+                        asyncio.create_task(
+                            producer.send_and_wait(RESPONSE_TOPIC, value=response_event, key=session_id)
                         )
-                        
                         print(f"→ Published agent response for {session_id}")
+
+                        # Save to database in background (non-blocking)
+                        if conversation_id and query_text:
+                            async def save_to_db():
+                                try:
+                                    conn = get_database_connection()
+                                    if conn:
+                                        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                                            # Use MAX instead of COUNT for better performance
+                                            cursor.execute(
+                                                "SELECT COALESCE(MAX(message_order), 0) as max_order FROM queries WHERE conversation_id = %s",
+                                                (conversation_id,)
+                                            )
+                                            result = cursor.fetchone()
+                                            message_order = (result['max_order'] if result else 0) + 1
+
+                                        save_query_to_conversation(
+                                            conversation_id=conversation_id,
+                                            user_message=query_text,
+                                            agent_type=agent_type,
+                                            agent_response=agent_response,
+                                            message_order=message_order,
+                                            user_id=state.get("user_data", {}).get("id") if isinstance(state.get("user_data"), dict) else None
+                                        )
+                                        print(f"→ Saved message to conversation {conversation_id}")
+                                except Exception as save_error:
+                                    print(f"⚠️ Error saving to conversation: {save_error}")
+                            
+                            # Run DB save in background without blocking
+                            asyncio.create_task(save_to_db())
                         
                         # Commit offset after successful processing
                         await consumers[current_priority].commit()
@@ -389,8 +393,8 @@ class PriorityConsumer:
                     except Exception as e:
                         print(f"✗ {agent_type} agent error for {session_id}: {e}")
                 
-                # Small sleep to prevent tight loop
-                await asyncio.sleep(0.01)
+                # Small sleep to prevent tight loop (reduced for faster response)
+                await asyncio.sleep(0.001)  # Reduced from 0.01s to 0.001s (1ms)
                 
         finally:
             for consumer in consumers.values():
@@ -1749,8 +1753,8 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
     )
     
     await consumer.start()
-    # Give consumer a moment to fully subscribe
-    await asyncio.sleep(0.5)
+    # Give consumer a moment to fully subscribe (reduced delay)
+    await asyncio.sleep(0.1)  # Reduced from 0.5s to 0.1s
     print(f"✓ Kafka consumer started for session {session_id}")
     
     # Send initial connection confirmation
@@ -1765,8 +1769,8 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
         # Use getmany with timeout to allow periodic keepalive checks
         while True:
             try:
-                # Poll for messages with timeout
-                messages = await consumer.getmany(timeout_ms=5000, max_records=10)
+                # Poll for messages with timeout (reduced for faster response delivery)
+                messages = await consumer.getmany(timeout_ms=1000, max_records=10)  # Reduced from 5000ms to 1000ms
                 
                 if messages:
                     print(f"📥 Received {sum(len(msgs) for msgs in messages.values())} message(s) from Kafka for session {session_id}")
@@ -1793,8 +1797,8 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
                             await websocket.send_json(event)
                             print(f"✓ Sent to frontend: {session_id} - {event.get('agent_type', 'UNKNOWN')}")
                 
-                # Send keepalive ping every 30 seconds
-                await asyncio.sleep(0.1)  # Small delay to prevent tight loop
+                # Small delay to prevent tight loop (reduced for faster polling)
+                await asyncio.sleep(0.01)  # Reduced from 0.1s to 0.01s
                 
             except asyncio.TimeoutError:
                 # Timeout is expected when no messages - send keepalive
