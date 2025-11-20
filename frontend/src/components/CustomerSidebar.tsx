@@ -13,24 +13,88 @@ import {
   SidebarGroupContent,
   SidebarSeparator,
   SidebarFooter,
+  useSidebar,
 } from './ui/sidebar';
 import { Orders } from './Orders';
 import { Profile } from './Profile';
+import { ChatHistory } from './ChatHistory';
 import { Button } from './ui/button';
 import { 
   Package, 
   User, 
   MessageSquare,
-  LogOut
+  LogOut,
+  PanelRightOpen,
+  Settings
 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
+import { cn } from './ui/utils';
+
+// Account Sidebar Trigger - uses controlled state
+function AccountSidebarTriggerComponent({ onToggle }: { onToggle: () => void }) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="shadow-md"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+    >
+      Account
+    </Button>
+  );
+}
+
+// Chat History Sidebar Trigger - uses inner SidebarProvider context
+function ChatHistorySidebarTriggerComponent() {
+  const { toggleSidebar } = useSidebar();
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="shadow-md"
+      onClick={(e) => {
+        e.stopPropagation();
+        toggleSidebar();
+      }}
+    >
+      Chat History
+    </Button>
+  );
+}
 
 interface CustomerSidebarProps {
   children: React.ReactNode;
+  chatHistoryOpen?: boolean;
+  onChatHistoryToggle?: (open: boolean) => void;
+  selectedConversationId?: string;
+  selectedSessionId?: string;
+  onSelectConversation?: (conversationId: string, sessionId: string) => void;
+  onNewChat?: () => void;
+  chatHistoryRefresh?: number;
+  isAdmin?: boolean;
+  onAdminToggle?: () => void;
+  currentView?: 'chat' | 'admin';
 }
 
-export function CustomerSidebar({ children }: CustomerSidebarProps) {
+export function CustomerSidebar({ 
+  children, 
+  chatHistoryOpen = false,
+  onChatHistoryToggle,
+  selectedConversationId,
+  selectedSessionId,
+  onSelectConversation,
+  onNewChat,
+  chatHistoryRefresh,
+  isAdmin = false,
+  onAdminToggle,
+  currentView = 'chat'
+}: CustomerSidebarProps) {
   const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [accountSidebarOpen, setAccountSidebarOpen] = useState(true);
   const { userProfile, userOrders, logout } = useUser();
 
   const handleTabClick = (tab: string) => {
@@ -52,10 +116,10 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
   };
 
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={true} open={accountSidebarOpen} onOpenChange={setAccountSidebarOpen}>
       <div className="flex h-screen w-full">
         <Sidebar className="border-r">
-          <SidebarHeader className="border-b p-4">
+          <SidebarHeader className="p-4">
             <div className="flex items-center gap-2">
               <MessageSquare className="h-6 w-6 text-primary" />
               <div>
@@ -71,19 +135,17 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
               <SidebarGroupLabel>Quick Overview</SidebarGroupLabel>
               <SidebarGroupContent>
                 <div className="grid grid-cols-2 gap-2 p-2">
-                  <div className="bg-muted/50 rounded-lg p-2 text-center">
+                  <div className="bg-muted/50 rounded-xl p-2 text-center">
                     <div className="text-lg font-bold text-primary">{sidebarStats.totalOrders}</div>
                     <div className="text-xs text-muted-foreground">Orders</div>
                   </div>
-                  <div className="bg-muted/50 rounded-lg p-2 text-center">
+                  <div className="bg-muted/50 rounded-xl p-2 text-center">
                     <div className="text-lg font-bold text-green-600">${sidebarStats.totalSpent.toFixed(0)}</div>
                     <div className="text-xs text-muted-foreground">Spent</div>
                   </div>
                 </div>
               </SidebarGroupContent>
             </SidebarGroup>
-
-            <SidebarSeparator />
 
             {/* Main Navigation */}
             <SidebarGroup>
@@ -94,7 +156,7 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
                     <SidebarMenuButton
                       onClick={() => handleTabClick('profile')}
                       isActive={activeTab === 'profile'}
-                      className="w-full justify-start"
+                      className="w-full justify-start rounded-lg"
                     >
                       <User className="h-4 w-4" />
                       Profile
@@ -105,7 +167,7 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
                     <SidebarMenuButton
                       onClick={() => handleTabClick('orders')}
                       isActive={activeTab === 'orders'}
-                      className="w-full justify-start"
+                      className="w-full justify-start rounded-lg"
                     >
                       <Package className="h-4 w-4" />
                       Orders
@@ -127,7 +189,7 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
             {activeTab === 'profile' && <Profile />}
           </SidebarContent>
 
-          <SidebarFooter className="border-t p-4">
+          <SidebarFooter className="p-4">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
                 <User className="h-4 w-4 text-primary" />
@@ -143,7 +205,7 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
               onClick={logout}
               variant="outline"
               size="sm"
-              className="w-full"
+              className="w-full shadow-md"
             >
               <LogOut className="h-4 w-4 mr-2" />
               Logout
@@ -152,17 +214,47 @@ export function CustomerSidebar({ children }: CustomerSidebarProps) {
         </Sidebar>
 
         {/* Main Content */}
-        <div className="flex-1 flex flex-col">
-          <div className="border-b p-4 bg-background">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger />
-              <h1 className="text-xl font-semibold">Capgemini Agent Stack</h1>
+        <SidebarProvider defaultOpen={false} open={chatHistoryOpen} onOpenChange={onChatHistoryToggle}>
+          <div className="flex-1 flex flex-col">
+            <div className="p-4 bg-background rounded-b-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AccountSidebarTriggerComponent onToggle={() => setAccountSidebarOpen(!accountSidebarOpen)} />
+                <h1 className="text-xl font-semibold">Capgemini Agent Stack</h1>
+              </div>
+              <div className="flex items-center gap-2">
+                {isAdmin && onAdminToggle && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shadow-md"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAdminToggle();
+                    }}
+                  >
+                    <Settings className="h-4 w-4 mr-2" />
+                    {currentView === 'admin' ? 'Chat' : 'Admin'}
+                  </Button>
+                )}
+                <ChatHistorySidebarTriggerComponent />
+              </div>
+            </div>
+            </div>
+            <div className="flex-1">
+              {children}
             </div>
           </div>
-          <div className="flex-1">
-            {children}
-          </div>
-        </div>
+
+          {/* Chat History Sidebar */}
+          <ChatHistory 
+            isOpen={chatHistoryOpen || false} 
+            onClose={() => onChatHistoryToggle?.(false)}
+            onSelectConversation={onSelectConversation}
+            onNewChat={onNewChat}
+            refreshTrigger={chatHistoryRefresh}
+          />
+        </SidebarProvider>
       </div>
     </SidebarProvider>
   );

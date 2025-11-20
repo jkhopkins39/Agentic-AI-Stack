@@ -255,7 +255,7 @@ export function Orders() {
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h2>Your Orders</h2>
-          <Button onClick={refreshOrders} size="sm" variant="outline">
+          <Button onClick={refreshOrders} size="sm" variant="outline" className="shadow-md">
             <RefreshCw className="h-4 w-4 mr-2" />
             Retry
           </Button>
@@ -277,11 +277,11 @@ export function Orders() {
       <div className="flex items-center justify-between">
         <h2>Your Orders</h2>
         <div className="flex gap-2">
-          <Button onClick={refreshOrders} size="sm" variant="outline" disabled={isLoadingOrders}>
+          <Button onClick={refreshOrders} size="sm" variant="outline" disabled={isLoadingOrders} className="shadow-md">
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoadingOrders ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button onClick={handleNewOrder} size="sm">
+          <Button onClick={handleNewOrder} size="sm" className="shadow-md">
             <Plus className="h-4 w-4 mr-2" />
             New Order
           </Button>

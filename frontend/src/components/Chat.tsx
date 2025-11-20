@@ -295,14 +295,27 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
                 // This ensures we don't clear the current messages when conversationId is set
                 if (messagesRef.current.length > 0) {
                   lastLoadedConversationRef.current = data.conversation_id;
-                  prevConversationIdRef.current = undefined; // Set previous to undefined so transition is detected correctly
+                  prevConversationIdRef.current = undefined;
                 }
                 skipNextHistoryLoadRef.current = true;
                 setConversationId(data.conversation_id);
-                // Notify parent component that a new conversation was created
                 if (onConversationCreated) {
                   onConversationCreated(data.conversation_id, sessionId);
                 }
+              }
+              return; // Don't process connection messages as chat messages
+            }
+            
+            // Update conversation_id if provided in regular messages
+            if (data.conversation_id && !conversationId) {
+              if (messagesRef.current.length > 0) {
+                lastLoadedConversationRef.current = data.conversation_id;
+                prevConversationIdRef.current = undefined;
+              }
+              skipNextHistoryLoadRef.current = true;
+              setConversationId(data.conversation_id);
+              if (onConversationCreated) {
+                onConversationCreated(data.conversation_id, sessionId);
               }
             }
             
@@ -550,24 +563,24 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
   // directly in the WebSocket message handler to prevent double messages
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-gradient-to-br from-blue-50 to-indigo-100">
       {/* Connection Status */}
-      <div className="px-4 py-2 border-b bg-muted/50">
+      <div className="px-6 py-3 bg-white/80 backdrop-blur-sm rounded-b-lg border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-600' : 'bg-red-600'}`} />
-            <span className="text-sm text-muted-foreground">
+            <span className="text-sm text-gray-600 font-medium">
               {isConnected ? 'Connected to Agent Stack' : 'Connecting...'}
             </span>
             {loadingHistory && (
-              <span className="text-xs text-muted-foreground">Loading history...</span>
+              <span className="text-xs text-gray-500">Loading history...</span>
             )}
           </div>
           <div className="flex items-center gap-2">
             {conversationId && (
-              <span className="text-xs text-muted-foreground">Conversation: {conversationId.slice(-8)}</span>
+              <span className="text-xs text-gray-500">Conversation: {conversationId.slice(-8)}</span>
             )}
-            <span className="text-xs text-muted-foreground">Session: {sessionId.slice(-8)}</span>
+            <span className="text-xs text-gray-500">Session: {sessionId.slice(-8)}</span>
           </div>
         </div>
       </div>
@@ -576,22 +589,24 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
       <div 
         ref={messagesContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-4"
+        className="flex-1 overflow-y-auto px-6 py-4 space-y-2"
       >
         {loadingHistory ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">Loading conversation history...</p>
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600 mb-4" />
+            <p className="text-gray-600">Loading conversation history...</p>
           </div>
         ) : messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <Bot className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Welcome back, {userName?.split(' ')[0] || 'User'}!</h3>
-            <p className="text-muted-foreground mb-4">
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
+              <Bot className="h-8 w-8 text-blue-600" />
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Welcome back, {userName?.split(' ')[0] || 'User'}!</h3>
+            <p className="text-base text-gray-600 mb-4">
               I can help you with orders, policies, general questions, and more!
             </p>
-            <div className="text-sm text-muted-foreground">
-              <p>Try asking:</p>
+            <div className="text-sm text-gray-600 bg-white/60 rounded-xl p-4 border border-gray-200 shadow-sm">
+              <p className="font-medium mb-2">Try asking:</p>
               <p>• "What's my order status?"</p>
               <p>• "What's your return policy?"</p>
               <p>• "I need help with my account"</p>
@@ -605,23 +620,23 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
             className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[80%] rounded-lg p-3 ${
+              className={`max-w-[80%] rounded-2xl p-4 shadow-md border ${
                 message.isUser
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted'
+                  ? 'bg-blue-600 text-white border-blue-700'
+                  : 'bg-white border-gray-200'
               }`}
             >
               {!message.isUser && message.agentType && (
                 <div className="flex items-center mb-2">
-                  <Bot className="h-3 w-3 mr-1" />
-                  <span className="text-xs font-medium opacity-70">
+                  <Bot className="h-3 w-3 mr-1 text-blue-600" />
+                  <span className="text-xs font-medium text-gray-600">
                     {message.agentType.replace('_AGENT', '')} Agent
                   </span>
                 </div>
               )}
-              <p className="mb-2 whitespace-pre-wrap">{message.content}</p>
+              <p className={`mb-2 whitespace-pre-wrap ${message.isUser ? 'text-white' : 'text-gray-900'}`}>{message.content}</p>
               <div className="flex items-center justify-between">
-                <span className="text-xs opacity-70">
+                <span className={`text-xs ${message.isUser ? 'text-blue-100' : 'text-gray-500'}`}>
                   {message.timestamp.toLocaleTimeString()}
                 </span>
                 {message.isUser && (
@@ -638,21 +653,21 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t bg-background">
+      <div className="p-6 bg-white/80 backdrop-blur-sm rounded-t-lg">
         <div className="flex justify-center">
-          <div className="flex gap-2 items-center w-full max-w-2xl bg-input-background rounded-full p-2 border">
+          <div className="flex gap-2 items-center w-full max-w-2xl bg-white rounded-full p-2 border-2 border-gray-300 shadow-md">
             <Input
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder={isConnected ? "Type your message..." : "Connecting to agents..."}
               onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
               disabled={!isConnected}
-              className="flex-1 min-w-0 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="flex-1 min-w-0 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-base text-gray-900 placeholder:text-gray-400"
             />
             <Button 
               onClick={handleSendMessage} 
               size="icon" 
-              className="shrink-0 rounded-full"
+              className="shrink-0 rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-md"
               disabled={!isConnected || !inputValue.trim()}
             >
               <Send className="h-4 w-4" />
@@ -660,7 +675,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
           </div>
         </div>
         <div className="text-center mt-2">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-gray-500">
             Press Enter to send • Shift+Enter for new line
           </p>
         </div>

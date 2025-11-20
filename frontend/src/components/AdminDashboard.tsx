@@ -321,7 +321,7 @@ const AdminDashboard: React.FC = () => {
                 </h2>
                 <p className="text-gray-600">{session.user_email || 'No email'}</p>
               </div>
-              <Button onClick={() => setSelectedSession(null)} variant="outline">
+              <Button onClick={() => setSelectedSession(null)} variant="outline" className="shadow-md">
                 Close
               </Button>
             </div>

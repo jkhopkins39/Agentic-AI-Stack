@@ -47,7 +47,7 @@ export function Profile() {
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h2>Profile</h2>
-          <Button onClick={refreshProfile} size="sm" variant="outline">
+          <Button onClick={refreshProfile} size="sm" variant="outline" className="shadow-md">
             <RefreshCw className="h-4 w-4 mr-2" />
             Retry
           </Button>
@@ -84,7 +84,7 @@ export function Profile() {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h2>Profile</h2>
-        <Button onClick={refreshProfile} size="sm" variant="outline" disabled={isLoadingProfile}>
+        <Button onClick={refreshProfile} size="sm" variant="outline" disabled={isLoadingProfile} className="shadow-md">
           <RefreshCw className={`h-4 w-4 mr-2 ${isLoadingProfile ? 'animate-spin' : ''}`} />
           Refresh
         </Button>

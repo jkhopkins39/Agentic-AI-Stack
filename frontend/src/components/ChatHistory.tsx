@@ -1,8 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from './ui/button';
-import { Plus, MessageSquare, X, Loader2, Trash2 } from 'lucide-react';
+import { Plus, MessageSquare, Loader2, Trash2 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
 import { API_BASE_URL } from '../config';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarHeader,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarGroupContent,
+} from './ui/sidebar';
 
 interface ChatSession {
   conversation_id: string;
@@ -122,88 +130,88 @@ export function ChatHistory({ isOpen, onClose, onSelectConversation, onNewChat, 
     return `Chat ${session.message_count > 0 ? `(${session.message_count} messages)` : '(New)'}`;
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed top-20 right-0 h-[calc(100vh-5rem)] w-80 bg-white border-l border-gray-200 shadow-lg z-50 flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-5 w-5" />
-            <span className="font-medium">Chat History</span>
+    <Sidebar side="right" collapsible="offcanvas" className="border-l">
+      <SidebarHeader className="p-4">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+            <MessageSquare className="h-4 w-4 text-blue-600" />
           </div>
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={onClose}
-            className="h-8 w-8 p-0"
-          >
-            <X className="h-4 w-4" />
+          <div>
+            <span className="font-semibold text-gray-900">Chat History</span>
+            <p className="text-xs text-gray-600">View and manage conversations</p>
+          </div>
+        </div>
+      </SidebarHeader>
+
+      <SidebarContent className="overflow-y-auto">
+        {/* New Chat Button */}
+        <div className="p-4">
+          <Button onClick={handleNewChat} className="w-full bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md">
+            <Plus className="h-4 w-4 mr-2" />
+            New Chat
           </Button>
         </div>
-        <Button onClick={handleNewChat} className="w-full">
-          <Plus className="h-4 w-4 mr-2" />
-          New Chat
-        </Button>
-      </div>
 
-      {/* Chat Sessions List */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : chatSessions.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground text-sm">
-              No chat history yet. Start a new conversation!
-            </div>
-          ) : (
-            chatSessions.map((session) => (
-              <div
-                key={session.conversation_id}
-                className="w-full mb-2 rounded-lg hover:bg-muted transition-colors group relative"
-              >
-                <button
-                  onClick={() => handleChatSelect(session.conversation_id, session.session_id)}
-                  className="w-full p-3 text-left"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0 pr-8">
-                      <h4 className="font-medium text-sm text-foreground truncate">
-                        {getTitle(session)}
-                      </h4>
-                      {session.last_message && (
-                        <p className="text-xs text-muted-foreground mt-1 truncate">
-                          {session.last_message}
-                        </p>
-                      )}
-                      {session.message_count > 0 && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {session.message_count} message{session.message_count !== 1 ? 's' : ''}
-                        </p>
-                      )}
-                    </div>
-                    <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
-                      {formatRelativeTime(session.updated_at)}
-                    </span>
-                  </div>
-                </button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={(e) => handleDeleteChat(e, session.conversation_id)}
-                  className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-600 hover:text-red-700 hover:bg-red-50"
-                  title="Delete conversation"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+        {/* Chat Sessions List */}
+        <SidebarGroup>
+          <SidebarGroupContent className="p-4">
+            {loading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
               </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
+            ) : chatSessions.length === 0 ? (
+              <div className="text-center py-8 text-gray-500 text-sm">
+                No chat history yet. Start a new conversation!
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {chatSessions.map((session) => (
+                  <div
+                    key={session.conversation_id}
+                    className="w-full rounded-xl hover:bg-gray-50 transition-colors group relative border border-gray-200 shadow-sm"
+                  >
+                    <button
+                      onClick={() => handleChatSelect(session.conversation_id, session.session_id)}
+                      className="w-full p-3 text-left"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0 pr-8">
+                          <h4 className="font-medium text-sm text-gray-900 truncate">
+                            {getTitle(session)}
+                          </h4>
+                          {session.last_message && (
+                            <p className="text-xs text-gray-600 mt-1 truncate">
+                              {session.last_message}
+                            </p>
+                          )}
+                          {session.message_count > 0 && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              {session.message_count} message{session.message_count !== 1 ? 's' : ''}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-xs text-gray-500 ml-2 flex-shrink-0">
+                          {formatRelativeTime(session.updated_at)}
+                        </span>
+                      </div>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => handleDeleteChat(e, session.conversation_id)}
+                      className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-600 hover:text-red-700 hover:bg-red-50"
+                      title="Delete conversation"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+    </Sidebar>
   );
 }
