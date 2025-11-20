@@ -51,26 +51,6 @@ export function UserProvider({ children }: UserProviderProps) {
 
   // Load user profile
   const loadUserProfile = async (email: string) => {
-    // Handle guest login - skip profile loading
-    if (email === 'guest@example.com') {
-      setUserProfile({
-        profile: {
-          id: 'guest',
-          email: 'guest@example.com',
-          first_name: 'Guest',
-          last_name: 'User',
-          phone: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        },
-        addresses: [],
-        total_orders: 0,
-        total_spent: 0
-      });
-      setIsLoadingProfile(false);
-      return;
-    }
-    
     setIsLoadingProfile(true);
     setProfileError(null);
     
@@ -82,6 +62,7 @@ export function UserProvider({ children }: UserProviderProps) {
       setProfileError(error instanceof Error ? error.message : 'Failed to load profile');
       // For guest or invalid users, set a minimal profile
       if (email === 'guest@example.com' || error instanceof Error && error.message.includes('404')) {
+        const now = new Date().toISOString();
         setUserProfile({
           profile: {
             id: 'guest',
@@ -89,8 +70,9 @@ export function UserProvider({ children }: UserProviderProps) {
             first_name: 'Guest',
             last_name: 'User',
             phone: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            is_admin: false,
+            created_at: now,
+            updated_at: now
           },
           addresses: [],
           total_orders: 0,
@@ -104,18 +86,6 @@ export function UserProvider({ children }: UserProviderProps) {
 
   // Load user orders
   const loadUserOrders = async (email: string) => {
-    // Handle guest login - skip orders loading
-    if (email === 'guest@example.com') {
-      setUserOrders({
-        orders: [],
-        total_count: 0,
-        page: 1,
-        limit: 10
-      });
-      setIsLoadingOrders(false);
-      return;
-    }
-    
     setIsLoadingOrders(true);
     setOrdersError(null);
     

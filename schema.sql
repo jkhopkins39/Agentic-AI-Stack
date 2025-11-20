@@ -8,6 +8,7 @@ CREATE TABLE users (
     first_name VARCHAR(100),
     last_name VARCHAR(100),
     phone VARCHAR(20),
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     correlation_id UUID DEFAULT uuid_generate_v4(), -- For end-to-end tracing
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -148,16 +149,16 @@ CREATE INDEX idx_email_notifications_email_type ON email_notifications(email_typ
 
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$ language 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
 -- Trigger to auto-populate correlation_id in related tables
 CREATE OR REPLACE FUNCTION populate_correlation_id()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
     -- For user_addresses, use the user's correlation_id
     IF TG_TABLE_NAME = 'user_addresses' AND NEW.correlation_id IS NULL THEN
@@ -171,7 +172,7 @@ BEGIN
     
     RETURN NEW;
 END;
-$ language 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
 -- Apply updated_at triggers to relevant tables
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users 
@@ -203,14 +204,63 @@ CREATE TRIGGER populate_order_items_correlation_id BEFORE INSERT ON order_items
     FOR EACH ROW EXECUTE FUNCTION populate_correlation_id();
 
 -- Add some sample data for testing with correlation IDs
-INSERT INTO users (email, password_hash, first_name, last_name, phone) VALUES
-('john.doe@example.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj6MJo/5fF3y', 'John', 'Doe', '555-0123'),
-('jane.smith@example.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj6MJo/5fF3y', 'Jane', 'Smith', '555-0124');
+INSERT INTO users (email, password_hash, first_name, last_name, phone, is_admin) VALUES
+('john.doe@example.com', 'password123', 'John', 'Doe', '555-0123', FALSE),
+('jane.smith@example.com', 'password123', 'Jane', 'Smith', '555-0124', FALSE),
+('admin@example.com', '\/LewdBPj4J/8KzKz2K', 'Admin', 'User', '555-0000', TRUE),
+('guest@example.com', 'guestpass', 'Guest', 'User', NULL, FALSE);
+
+INSERT INTO user_addresses (user_id, address, city, state, postal_code, country) VALUES
+((SELECT id FROM users WHERE email = 'john.doe@example.com'), '123 Maple St', 'Austin', 'TX', '73301', 'USA'),
+((SELECT id FROM users WHERE email = 'jane.smith@example.com'), '456 Oak Ave', 'Denver', 'CO', '80014', 'USA');
 
 INSERT INTO products (name, description, price, stock_quantity) VALUES
 ('Laptop Computer', 'High-performance laptop for work and gaming', 999.99, 50),
 ('Wireless Headphones', 'Noise-cancelling wireless headphones', 299.99, 100),
 ('Coffee Mug', 'Ceramic coffee mug with company logo', 19.99, 200);
 
--- Grant necessary permissions for replication (needed for Kafka Connect)
-ALTER USER AgenticAIStackDB WITH REPLICATION;
+INSERT INTO orders (order_number, user_id, status, total_amount, currency, address_id)
+VALUES
+(
+    'ORD-1001',
+    (SELECT id FROM users WHERE email = 'john.doe@example.com'),
+    'completed',
+    249.98,
+    'USD',
+    (SELECT id FROM user_addresses WHERE user_id = (SELECT id FROM users WHERE email = 'john.doe@example.com') LIMIT 1)
+),
+(
+    'ORD-1002',
+    (SELECT id FROM users WHERE email = 'jane.smith@example.com'),
+    'shipped',
+    1299.98,
+    'USD',
+    (SELECT id FROM user_addresses WHERE user_id = (SELECT id FROM users WHERE email = 'jane.smith@example.com') LIMIT 1)
+);
+
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+VALUES
+(
+    (SELECT id FROM orders WHERE order_number = 'ORD-1001'),
+    (SELECT id FROM products WHERE name = 'Wireless Headphones'),
+    2,
+    124.99
+),
+(
+    (SELECT id FROM orders WHERE order_number = 'ORD-1002'),
+    (SELECT id FROM products WHERE name = 'Laptop Computer'),
+    1,
+    999.99
+),
+(
+    (SELECT id FROM orders WHERE order_number = 'ORD-1002'),
+    (SELECT id FROM products WHERE name = 'Coffee Mug'),
+    1,
+    19.99
+),
+(
+    (SELECT id FROM orders WHERE order_number = 'ORD-1002'),
+    (SELECT id FROM products WHERE name = 'Wireless Headphones'),
+    1,
+    279.99
+);

@@ -4,7 +4,7 @@ from .sms_notifications import send_sms_notification, format_order_receipt_sms
 from .preferences import get_user_notification_preference
 
 # Session email from environment or default. Change system email
-DEFAULT_SYSTEM_EMAIL = "support@agenticaistack.com"
+DEFAULT_SYSTEM_EMAIL = "agenticstack@commerceconductor.com"
 SESSION_EMAIL = os.getenv('USER_EMAIL', DEFAULT_SYSTEM_EMAIL)
 
 """Checks preferences and sends notification via email or SMS. WIP"""

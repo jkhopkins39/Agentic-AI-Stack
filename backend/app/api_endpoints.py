@@ -18,6 +18,7 @@ class UserProfile(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
+    is_admin: bool = False
     created_at: str
     updated_at: str
 
@@ -187,6 +188,7 @@ async def get_user_profile(user_email: str) -> UserProfileResponse:
             first_name=user_data.get('first_name'),
             last_name=user_data.get('last_name'),
             phone=user_data.get('phone'),
+            is_admin=user_data.get('is_admin', False),
             created_at=user_data['created_at'].isoformat(),
             updated_at=user_data['updated_at'].isoformat()
         )
@@ -310,3 +312,80 @@ async def get_order_details(order_number: str) -> Order:
     except Exception as e:
         print(f"Error getting order details: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class CreateOrderItem(BaseModel):
+    product_id: str
+    quantity: int
+    unit_price: float
+
+
+class CreateOrderRequest(BaseModel):
+    user_email: str
+    items: List[CreateOrderItem]
+    status: str = "pending"
+    currency: str = "USD"
+
+
+async def create_order(request: CreateOrderRequest) -> Order:
+    """Create a new order for a user"""
+    conn = get_database_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    try:
+        # Get user by email
+        user_data = lookup_user_by_email(request.user_email)
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_id = user_data['id']
+        
+        # Get user's first address (or create a default one)
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT id FROM user_addresses 
+                WHERE user_id = %s 
+                LIMIT 1
+            """, (user_id,))
+            address_row = cursor.fetchone()
+            address_id = address_row['id'] if address_row else None
+        
+        # Generate order number
+        import uuid
+        order_number = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+        
+        # Calculate total amount
+        total_amount = sum(item.unit_price * item.quantity for item in request.items)
+        
+        # Create order
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                INSERT INTO orders (order_number, user_id, status, total_amount, currency, address_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id, order_number, status, total_amount, currency, created_at, updated_at
+            """, (order_number, user_id, request.status, total_amount, request.currency, address_id))
+            
+            order_row = cursor.fetchone()
+            order_id = order_row['id']
+            
+            # Create order items
+            for item in request.items:
+                cursor.execute("""
+                    INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+                    VALUES (%s, %s, %s, %s)
+                """, (order_id, item.product_id, item.quantity, item.unit_price))
+            
+            conn.commit()
+        
+        # Return the created order
+        return await get_order_details(order_number)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating order: {e}")
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    finally:
+        conn.close()

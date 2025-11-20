@@ -1,14 +1,178 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { Plus, Package, Truck, CheckCircle, RotateCcw, ArrowLeft, RefreshCw, AlertCircle } from 'lucide-react';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Plus, Package, Truck, CheckCircle, RotateCcw, ArrowLeft, RefreshCw, AlertCircle, X } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
+import { API_BASE_URL } from '../config';
 
 type OrderStatus = 'pending' | 'in_transit' | 'delivered' | 'return_processing' | 'returned' | 'cancelled';
 
+interface Product {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  stock_quantity: number;
+}
+
+interface OrderItem {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+}
+
 export function Orders() {
-  const { userOrders, isLoadingOrders, ordersError, refreshOrders } = useUser();
+  const { userOrders, isLoadingOrders, ordersError, refreshOrders, currentUserEmail } = useUser();
+  const [showOrderForm, setShowOrderForm] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pendingAddItem = useRef(false);
+
+  // Load products when form is shown
+  useEffect(() => {
+    if (showOrderForm && products.length === 0) {
+      fetchProducts();
+    }
+  }, [showOrderForm]);
+
+  // Add first item when products are loaded and form is shown
+  useEffect(() => {
+    if (showOrderForm && products.length > 0 && orderItems.length === 0) {
+      setOrderItems([{
+        product_id: products[0].id,
+        product_name: products[0].name,
+        quantity: 1,
+        unit_price: products[0].price
+      }]);
+    }
+  }, [showOrderForm, products.length]);
+
+  // Handle pending add item when products load
+  useEffect(() => {
+    if (pendingAddItem.current && products.length > 0) {
+      setOrderItems(prevItems => [...prevItems, {
+        product_id: products[0].id,
+        product_name: products[0].name,
+        quantity: 1,
+        unit_price: products[0].price
+      }]);
+      pendingAddItem.current = false;
+    }
+  }, [products]);
+
+  const fetchProducts = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/products`);
+      const data = await response.json();
+      setProducts(data.products || []);
+    } catch (err) {
+      console.error('Error fetching products:', err);
+      setError('Failed to load products');
+    }
+  };
+
+  const handleNewOrder = () => {
+    setOrderItems([]);
+    setError(null);
+    setShowOrderForm(true);
+  };
+
+  const addOrderItem = async () => {
+    // If products aren't loaded yet, fetch them and mark that we want to add an item
+    if (products.length === 0) {
+      pendingAddItem.current = true;
+      await fetchProducts();
+      return;
+    }
+    
+    // Products are loaded, add item immediately
+    setOrderItems(prevItems => [...prevItems, {
+      product_id: products[0].id,
+      product_name: products[0].name,
+      quantity: 1,
+      unit_price: products[0].price
+    }]);
+  };
+
+  const removeOrderItem = (index: number) => {
+    setOrderItems(orderItems.filter((_, i) => i !== index));
+  };
+
+  const updateOrderItem = (index: number, field: keyof OrderItem, value: string | number) => {
+    const updated = [...orderItems];
+    if (field === 'product_id') {
+      const product = products.find(p => p.id === value);
+      if (product) {
+        updated[index] = {
+          ...updated[index],
+          product_id: product.id,
+          product_name: product.name,
+          unit_price: product.price
+        };
+      }
+    } else {
+      updated[index] = { ...updated[index], [field]: value };
+    }
+    setOrderItems(updated);
+  };
+
+  const calculateTotal = () => {
+    return orderItems.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+  };
+
+  const handleSubmitOrder = async () => {
+    if (!currentUserEmail) {
+      setError('User email not found');
+      return;
+    }
+
+    if (orderItems.length === 0) {
+      setError('Please add at least one item to the order');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_email: currentUserEmail,
+          items: orderItems.map(item => ({
+            product_id: item.product_id,
+            quantity: item.quantity,
+            unit_price: item.unit_price
+          })),
+          status: 'pending',
+          currency: 'USD'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to create order');
+      }
+
+      // Success - close form and refresh orders
+      setShowOrderForm(false);
+      setOrderItems([]);
+      refreshOrders();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create order');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const getStatusIcon = (status: string) => {
     switch (status.toLowerCase()) {
@@ -67,9 +231,6 @@ export function Orders() {
     }
   };
 
-  const handleNewOrder = () => {
-    // New order functionality would be implemented here
-  };
 
   // Loading state
   if (isLoadingOrders) {
@@ -133,20 +294,17 @@ export function Orders() {
         </div>
       )}
 
-<<<<<<< Updated upstream
-=======
       {orders.length === 0 && !showOrderForm && (
         <div className="text-center text-muted-foreground py-8">
           <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
           <p>No orders found</p>
-          <Button onClick={handleNewOrder} className="mt-4 shadow-md">
+          <Button onClick={handleNewOrder} className="mt-4">
             <Plus className="h-4 w-4 mr-2" />
             Place Your First Order
           </Button>
         </div>
       )}
 
->>>>>>> Stashed changes
       <div className="space-y-3">
         {orders.map((order) => (
           <Card key={order.id} className="p-3">
@@ -194,17 +352,6 @@ export function Orders() {
         ))}
       </div>
 
-<<<<<<< Updated upstream
-      {orders.length === 0 && (
-        <div className="text-center text-muted-foreground py-8">
-          <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>No orders found</p>
-          <Button onClick={handleNewOrder} className="mt-4">
-            <Plus className="h-4 w-4 mr-2" />
-            Place Your First Order
-          </Button>
-        </div>
-=======
       {/* Inline Order Form */}
       {showOrderForm && (
         <Card className="p-4 mt-4">
@@ -233,7 +380,7 @@ export function Orders() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label>Order Items</Label>
-                <Button onClick={addOrderItem} size="sm" variant="outline" className="shadow-md">
+                <Button onClick={addOrderItem} size="sm" variant="outline">
                   <Plus className="h-4 w-4 mr-1" />
                   Add Item
                 </Button>
@@ -333,21 +480,20 @@ export function Orders() {
                 }}
                 variant="outline"
                 disabled={isSubmitting}
-                className="flex-1 shadow-md"
+                className="flex-1"
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleSubmitOrder}
                 disabled={isSubmitting || orderItems.length === 0}
-                className="flex-1 shadow-md"
+                className="flex-1"
               >
                 {isSubmitting ? 'Creating...' : 'Save Order'}
               </Button>
             </div>
           </div>
         </Card>
->>>>>>> Stashed changes
       )}
     </div>
   );

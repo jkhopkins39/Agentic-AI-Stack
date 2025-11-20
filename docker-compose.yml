@@ -72,6 +72,9 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MAILERSEND_API_KEY=${MAILERSEND_API_KEY}
+      - MAILERSEND_FROM_EMAIL=${MAILERSEND_FROM_EMAIL:-agenticstack@commerceconductor.com}
+      - MAILERSEND_FROM_NAME=${MAILERSEND_FROM_NAME:-Agentic AI Stack}
     volumes:
       - ./backend:/app
     depends_on:
@@ -94,7 +97,7 @@ services:
     command: sh -c "npm install --legacy-peer-deps && npm run dev -- --host 0.0.0.0 --port 5173"
     environment:
       - CHOKIDAR_USEPOLLING=true
-      - VITE_API_URL=http://localhost:8000  # Changed from REACT_APP_ to VITE_
+      - VITE_API_URL=http://backend:8000
       - VITE_HOST=0.0.0.0
     depends_on:
       - backend

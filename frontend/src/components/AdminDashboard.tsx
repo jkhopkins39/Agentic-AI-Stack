@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
+import { API_BASE_URL } from '../config';
 
 interface Session {
   conversation_id: string;
@@ -83,21 +84,21 @@ const AdminDashboard: React.FC = () => {
     setLoading(true);
     try {
       if (activeTab === 'overview') {
-        const response = await fetch('http://localhost:8000/api/admin/stats');
+        const response = await fetch(`${API_BASE_URL}/api/admin/stats`);
         if (!response.ok) {
           throw new Error('Failed to fetch stats');
         }
         const data = await response.json();
         setStats(data);
       } else if (activeTab === 'sessions') {
-        const response = await fetch('http://localhost:8000/api/admin/sessions');
+        const response = await fetch(`${API_BASE_URL}/api/admin/sessions`);
         if (!response.ok) {
           throw new Error('Failed to fetch sessions');
         }
         const data = await response.json();
         setSessions(data.sessions || []);
       } else if (activeTab === 'users') {
-        const response = await fetch('http://localhost:8000/api/admin/users');
+        const response = await fetch(`${API_BASE_URL}/api/admin/users`);
         if (!response.ok) {
           throw new Error('Failed to fetch users');
         }
@@ -121,7 +122,7 @@ const AdminDashboard: React.FC = () => {
 
   const fetchSessionDetails = async (conversationId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/admin/session/${conversationId}`);
+      const response = await fetch(`${API_BASE_URL}/api/admin/session/${conversationId}`);
       const data = await response.json();
       setSelectedSession(data);
     } catch (error) {

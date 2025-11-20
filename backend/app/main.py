@@ -19,10 +19,6 @@ from pydantic import BaseModel
 import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from datetime import datetime, timedelta # For date/time operations
-import smtplib # For email service
-from email.mime.text import MIMEText # Additionally used for email service
-from email.mime.multipart import MIMEMultipart # Additionally used for email service
-SMTP_AVAILABLE = True
 from typing import Annotated, Literal, Optional, List, Dict, Any # Different data types we need
 from dotenv import load_dotenv # Importing dotenv to get API key from .env file
 from pydantic import BaseModel, Field # Used for validation and structuring message classification
@@ -36,6 +32,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from notifications.mailersend import send_email_via_mailersend
 
 # Data path reads in txt file for policy RAG
 DATA_PATH = os.path.join(os.getcwd())
@@ -130,6 +127,13 @@ def generate_data_store():
 load_dotenv()
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
+VERBOSE_CONSUMER_LOGS = os.getenv("VERBOSE_CONSUMER_LOGS", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def verbose_polling_log(message: str) -> None:
+    """Emit noisy consumer/orchestrator logs only when explicitly enabled."""
+    if VERBOSE_CONSUMER_LOGS:
+        print(message)
 
 from contextlib import asynccontextmanager
 PRIORITY_TOPICS = {
@@ -179,6 +183,8 @@ class PriorityConsumer:
                 value_deserializer=lambda m: json.loads(m.decode("utf-8")),
                 auto_offset_reset="earliest",
                 enable_auto_commit=False,
+                session_timeout_ms=30000,  # Increased to 30s to handle email operations
+                request_timeout_ms=30000
             )
             await consumer.start()
             
@@ -238,7 +244,7 @@ class PriorityConsumer:
                     now = time.time()
                     if now - last_p3_check >= p3_check_interval:
                         last_p3_check = now
-                        print(f"🔍 {agent_type} checking p3...")
+                        verbose_polling_log(f"🔍 {agent_type} checking p3...")
                         try:
                             data = await consumers[3].getmany(timeout_ms=50, max_records=1)
                             if data:
@@ -262,17 +268,20 @@ class PriorityConsumer:
                         continue  # Skip to next message
                     
                     session_id = event.get("session_id", "unknown")
-                    print(f"→ Consumed {session_id} from {topic}")
+                    message_type = event.get("message_type", "unknown")
+                    print(f"→ {agent_type} agent: Consumed {session_id} from {topic} (message_type: {message_type})", flush=True)
     
                     try:
                         # Extract state
                         state = event.get("state", {})
+                        print(f"→ {agent_type} agent: State extracted, calling handler...", flush=True)
                         
                         # Process with agent handler
                         if asyncio.iscoroutinefunction(agent_handler_func):
                             result = await agent_handler_func(state)
                         else:
                             result = agent_handler_func(state)
+                        print(f"→ {agent_type} agent: Handler completed", flush=True)
                         
                         # Extract agent response
                         last_message = result.get("messages", [{}])[-1]
@@ -361,6 +370,7 @@ async def lifespan(app: FastAPI):
     global producer, priority_consumer
         
         # Startup
+    ensure_default_users()
     producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
@@ -752,22 +762,38 @@ async def order_agent(state: State):
 import uuid, time
 
 async def email_agent(state: State):
+    import sys
+    print("=" * 80, flush=True)
+    print("📧 EMAIL AGENT CALLED", flush=True)
+    print("=" * 80, flush=True)
+    
     last_message = state["messages"][-1]
     user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
 
     message_type = state.get("message_type", "Email")
     conversation_context = state.get("conversation_context", {})
+    user_email = state.get("user_email") or (state.get("user_data", {}).get("email") if isinstance(state.get("user_data"), dict) else None)
 
     session_id = state.get("session_id", str(uuid.uuid4()))
     conversation_id = state.get("conversation_id", str(uuid.uuid4()))
 
+    print(f"📧 Email Agent - message_type: {message_type}, user_email: {user_email}, session: {session_id}", flush=True)
+    print(f"📧 Email Agent - Full state keys: {list(state.keys())}", flush=True)
+    print(f"📧 Email Agent - User message: {user_message[:100]}...", flush=True)
+
     # Branch 1: triggered email notification
     if state.get("needs_email_notification") and state.get("changes_made"):
+        print(f"📧 Email Agent - Handling information change notification", flush=True)
         return await handle_information_change_notification(state)
 
     # Branch 2: order receipt
     if message_type == "Order Receipt":
-        return await handle_order_receipt_request(state)
+        print(f"📧 Email Agent - Handling Order Receipt request for user: {user_email}", flush=True)
+        result = await handle_order_receipt_request(state)
+        print(f"📧 Email Agent - Order receipt handling complete", flush=True)
+        return result
+    else:
+        print(f"📧 Email Agent - message_type is '{message_type}', not 'Order Receipt'. Using default LLM branch.", flush=True)
 
     # Default branch: fall back to LLM
     messages = [
@@ -786,8 +812,8 @@ async def email_agent(state: State):
 
 
 # It checks the state for changes made and sends an email notification
-def handle_information_change_notification(state: State):
-    """Handle sending email notifications for information changes"""
+async def handle_information_change_notification(state: State):
+    """Handle sending email notifications for information changes to the logged-in user's email"""
     changes_made = state.get("changes_made", [])
     
     if not changes_made:
@@ -796,14 +822,18 @@ def handle_information_change_notification(state: State):
     # Get user email from state (logged-in user context)
     user_email = state.get("user_email") or (state.get("user_data", {}).get("email") if isinstance(state.get("user_data"), dict) else None)
     
-    # Fallback to SESSION_EMAIL only if no user_email in state (backward compatibility)
+    # Ensure we have a user email (required for sending)
     if not user_email:
-        user_email = SESSION_EMAIL
-        print(f"Warning: No user_email in state for email notification, using fallback SESSION_EMAIL")
+        print("⚠️ No user_email in state for email notification. Cannot send email.")
+        changes_text = ", ".join(changes_made)
+        response = f"Your {changes_text} has been updated successfully. However, I couldn't send you a notification email because no email address was found in your account."
+        return {
+            "messages": [{"role": "assistant", "content": f"Email Agent: {response}"}],
+            "needs_email_notification": False
+        }
     
-    # Send the information change email
-    email_sent = send_information_change_email(changes_made, recipient_email=user_email)
-    
+    # Send the information change email to the logged-in user's email
+    email_sent = await send_information_change_email(changes_made, recipient_email=user_email)
     
     if email_sent:
         # Notify the user the email was sent to their email
@@ -822,11 +852,17 @@ def handle_information_change_notification(state: State):
 User either provides it all at once or we ask follow-up questions. This function uses
 an LLM to parse the request and extract relevant variables. It is called conditionally
 to reduce number of API calls and latency"""
-def handle_order_receipt_request(state: State):
+async def handle_order_receipt_request(state: State):
+    print("=" * 80, flush=True)
+    print("📧 HANDLE_ORDER_RECEIPT_REQUEST CALLED", flush=True)
+    print("=" * 80, flush=True)
+    
     last_message = state["messages"][-1]
     user_message = last_message.get("content") if isinstance(last_message, dict) else last_message.content
 
     conversation_context = state.get("conversation_context", {})
+    
+    print(f"📧 Order Receipt Request - User message: {user_message}", flush=True)
     
     # Parse the order receipt request
     parser_llm = llm.with_structured_output(OrderReceiptParser)
@@ -863,13 +899,23 @@ def handle_order_receipt_request(state: State):
         print(f"Warning: No user_email in state for order receipt, using fallback SESSION_EMAIL")
     
     # Use user email to process the request
-    return process_receipt_request(parsing_result.model_dump(), user_email, conversation_context, state)
+    return await process_receipt_request(parsing_result.model_dump(), user_email, conversation_context, state)
 
-def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
+async def process_receipt_request(parsed_request: dict, user_email: str, conversation_context: dict, state: State):
     order_data = None
+    response = ""  # Initialize response variable
     
-    if parsed_request.get("order_number") and parsed_request["order_number"] not in ['<UNKNOWN>', None, '']:
+    # Helper function to check if a value is meaningful (not None, empty, or 'None' string)
+    def is_meaningful(value):
+        return value and str(value).strip() not in ['<UNKNOWN>', '', 'None', 'none', 'NONE', 'null', 'NULL']
+    
+    print(f"📧 Process Receipt Request - Parsed request: {parsed_request}", flush=True)
+    print(f"📧 Process Receipt Request - User email: {user_email}", flush=True)
+    
+    # Check if we have a specific order number
+    if is_meaningful(parsed_request.get("order_number")):
         # Look up by order number
+        print(f"📧 Process Receipt Request - Looking up by order number: {parsed_request['order_number']}", flush=True)
         order_data = lookup_order_by_number(parsed_request["order_number"])
         if not order_data:
             response = f"I couldn't find an order with number '{parsed_request['order_number']}'. Please check the order number and try again."
@@ -878,33 +924,63 @@ def process_receipt_request(parsed_request: dict, user_email: str, conversation_
             response = f"The order '{parsed_request['order_number']}' doesn't belong to the email address {user_email}. Please verify your information."
             order_data = None
     
-    elif parsed_request.get("chronological_request"):
-        # Look up most recent order
+    elif is_meaningful(parsed_request.get("chronological_request")):
+        # Look up most recent order based on chronological request (last, latest, most recent, etc.)
+        chronological = str(parsed_request.get("chronological_request", "")).lower().strip()
+        print(f"📧 Process Receipt Request - Chronological request detected: '{chronological}'", flush=True)
+        print(f"📧 Process Receipt Request - Looking up most recent order for {user_email}...", flush=True)
+        
         orders = lookup_orders_by_email(user_email, limit=1)
+        print(f"📧 Process Receipt Request - Found {len(orders)} order(s)", flush=True)
+        
         if orders:
             order_data = orders[0]
+            order_number = order_data.get('order_number', 'Unknown')
+            print(f"📧 Process Receipt Request - Retrieved order: {order_number}", flush=True)
+            # Update the parsed_request with the actual order number for reference and logging
+            parsed_request["order_number"] = order_number
+            print(f"📧 Process Receipt Request - Updated parsed_request with order_number: {order_number}", flush=True)
         else:
             response = f"I couldn't find any orders for {user_email}. Please check your email address."
+            print(f"📧 Process Receipt Request - No orders found for {user_email}", flush=True)
     
-    elif parsed_request.get("product_name") and parsed_request["product_name"] not in ['<UNKNOWN>', None, '']:
+    elif is_meaningful(parsed_request.get("product_name")):
         # Look up by product name
+        print(f"📧 Process Receipt Request - Looking up by product name: {parsed_request['product_name']}", flush=True)
         orders = lookup_orders_by_product_name(parsed_request["product_name"], user_email)
         if orders:
             order_data = orders[0]  # Get the most recent order with that product
+            order_number = order_data.get('order_number', 'Unknown')
+            parsed_request["order_number"] = order_number
+            print(f"📧 Process Receipt Request - Retrieved order by product: {order_number}", flush=True)
         else:
             response = f"I couldn't find any orders containing '{parsed_request['product_name']}' for {user_email}."
     
     else:
         # Default to most recent order
+        print(f"📧 Process Receipt Request - No specific criteria, defaulting to most recent order", flush=True)
         orders = lookup_orders_by_email(user_email, limit=1)
         if orders:
             order_data = orders[0]
+            order_number = order_data.get('order_number', 'Unknown')
+            parsed_request["order_number"] = order_number
+            print(f"📧 Process Receipt Request - Retrieved most recent order: {order_number}", flush=True)
         else:
             response = f"I couldn't find any orders for {user_email}. Please check your email address."
     
-    # If we found an order, send the receipt
+    # If we found an order, send the receipt to the logged-in user's email
     if order_data:
-        email_sent = send_order_receipt_email(order_data, recipient_email=user_email)
+        print(f"📧 Found order: {order_data.get('order_number')} for user: {user_email}", flush=True)
+        # Send email via MailerSend API (async, non-blocking)
+        try:
+            print(f"📧 Attempting to send order receipt email to {user_email}...", flush=True)
+            email_sent = await send_order_receipt_email(order_data, recipient_email=user_email)
+            print(f"📧 Email send result: {email_sent}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Error sending order receipt email: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            email_sent = False
         
         if email_sent:
             response = f"I've sent the receipt for order {order_data['order_number']} to {user_email}."
@@ -1142,69 +1218,56 @@ def lookup_orders_by_product_name(product_name: str, user_email: Optional[str] =
     finally:
         conn.close()
 
-# Send information change notification email using SendGrid SMTP relay. In production recipient email will be session email
-def send_information_change_email(changes_made: list, recipient_email: str = "jeremyyhop@gmail.com"):
-    if not SMTP_AVAILABLE:
-        print("SMTP not available. Email would have been sent to:", recipient_email)
-        print(f"Information change notification: {', '.join(changes_made)}")
+# Send information change notification email using MailerSend API
+async def send_information_change_email(changes_made: list, recipient_email: str):
+    """Send information change notification email to the logged-in user's email"""
+    if not recipient_email:
+        print("⚠️ No recipient email provided for information change notification")
         return False
     
-    # SendGrid SMTP configuration
-    smtp_server = "smtp.sendgrid.net"
-    smtp_port = 587  # Using TLS port
-    smtp_username = "apikey"
-    smtp_password = os.getenv('SENDGRID_API_KEY')  # Required - must be set in .env file
+    # Format the changes
+    changes_text = ", ".join(changes_made)
     
-    try:
-        # Format the changes
-        changes_text = ", ".join(changes_made)
-        
-        # Create the email message
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = "Account Information Changed - Agentic AI Stack"
-        msg['From'] = 'jeremyyhop@gmail.com'
-        msg['To'] = recipient_email
-        
-        # Create HTML content
-        html_content = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
-                    Account Information Updated
-                </h2>
-                
-                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
-                    <p style="margin: 0; font-size: 16px;">
-                        <strong>Your {changes_text} has been successfully updated.</strong>
-                    </p>
-                </div>
-                
-                <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                    <p style="margin: 0; color: #856404;">
-                        <strong>Security Notice:</strong> If you did not make this change, contact us at agenticaistack@gmail.com.
-                    </p>
-                </div>
-                
-                <div style="margin: 30px 0;">
-                    <p><strong>Need Help?</strong></p>
-                    <p>If this change was not made by you, please contact our support team immediately:</p>
-                    <p style="background-color: #e3f2fd; padding: 10px; border-radius: 3px;">
-                        📧 <a href="mailto:agenticaistack@gmail.com" style="color: #1976d2;">agenticaistack@gmail.com</a>
-                    </p>
-                </div>
-                
-                <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
-                    <p>This is an automated message from your Agentic AI Stack system.</p>
-                    <p>Please do not reply to this email.</p>
-                </div>
+    # Create HTML content
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
+                Account Information Updated
+            </h2>
+            
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                <p style="margin: 0; font-size: 16px;">
+                    <strong>Your {changes_text} has been successfully updated.</strong>
+                </p>
             </div>
-        </body>
-        </html>
-        """
-        
-        # Create plain text version
-        text_content = f"""
+            
+            <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p style="margin: 0; color: #856404;">
+                    <strong>Security Notice:</strong> If you did not make this change, contact us at agenticaistack@gmail.com.
+                </p>
+            </div>
+            
+            <div style="margin: 30px 0;">
+                <p><strong>Need Help?</strong></p>
+                <p>If this change was not made by you, please contact our support team immediately:</p>
+                <p style="background-color: #e3f2fd; padding: 10px; border-radius: 3px;">
+                    📧 <a href="mailto:agenticaistack@gmail.com" style="color: #1976d2;">agenticaistack@gmail.com</a>
+                </p>
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
+                <p>This is an automated message from your Agentic AI Stack system.</p>
+                <p>Please do not reply to this email.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Create plain text version
+    text_content = f"""
 Account Information Updated
 
 Your {changes_text} has been successfully updated.
@@ -1217,90 +1280,53 @@ Email: agenticaistack@gmail.com
 
 This is an automated message from your Agentic AI Stack system.
 Please do not reply to this email.
-        """
-        
-        # Attach parts
-        part1 = MIMEText(text_content, 'plain')
-        part2 = MIMEText(html_content, 'html')
-        msg.attach(part1)
-        msg.attach(part2)
-        
-        # Send the email using SMTP
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()  # Enable TLS encryption
-        server.login(smtp_username, smtp_password)
-        server.send_message(msg)
-        server.quit()
-        
-        print(f"Information change notification sent successfully via SMTP to {recipient_email}")
-        return True
-        
-    except Exception as e:
-        print(f"Error sending information change email via SMTP: {e}")
-        print("Email would have been sent to:", recipient_email)
-        print(f"Information change notification: {', '.join(changes_made)}")
-        return False
+    """
+    
+    # Send via MailerSend API
+    return await send_email_via_mailersend(
+        to_email=recipient_email,
+        subject="Account Information Changed - Agentic AI Stack",
+        html_content=html_content,
+        text_content=text_content
+    )
 
-# Send order receipt email using SendGrid SMTP relay. In production recipient email will be session email
-def send_order_receipt_email(order_data: dict, recipient_email: str = "jeremyyhop@gmail.com"):
-    """Send order receipt email using SendGrid SMTP relay"""
-    if not SMTP_AVAILABLE:
-        print("SMTP not available. Email would have been sent to:", recipient_email)
+# Send order receipt email using MailerSend API
+async def send_order_receipt_email(order_data: dict, recipient_email: str):
+    """Send order receipt email to the logged-in user's email using MailerSend API"""
+    if not recipient_email:
+        print("⚠️ No recipient email provided for order receipt")
         print("Order receipt content:", format_order_receipt(order_data))
         return False
     
-    # SendGrid SMTP configuration
-    smtp_server = "smtp.sendgrid.net"
-    smtp_port = 587  # Using TLS port
-    smtp_username = "apikey"
-    smtp_password = os.getenv('SENDGRID_API_KEY')  # Required - must be set in .env file
+    # Format the order receipt
+    receipt_content = format_order_receipt(order_data)
     
-    try:
-        # Format the order receipt
-        receipt_content = format_order_receipt(order_data)
-        
-        # Create the email message
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = f"Order Receipt - {order_data['order_number']}"
-        msg['From'] = 'jeremyyhop@gmail.com'
-        msg['To'] = recipient_email
-        
-        # Create HTML content
-        html_content = f"""
-        <html>
-        <body>
-            <h2>Order Receipt</h2>
-            <pre style="font-family: Arial, sans-serif; white-space: pre-wrap;">{receipt_content}</pre>
+    # Create HTML content
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
+                Order Receipt
+            </h2>
+            <pre style="font-family: 'Courier New', monospace; background-color: #f8f9fa; padding: 20px; border-radius: 5px; white-space: pre-wrap; font-size: 14px;">{receipt_content}</pre>
             <br><br>
             <p>If you have any questions, please contact our customer support.</p>
-        </body>
-        </html>
-        """
-        
-        # Create plain text version
-        text_content = f"Order Receipt\n\n{receipt_content}\n\nThank you for your business!\nIf you have any questions, please contact our customer support."
-        
-        # Attach parts
-        part1 = MIMEText(text_content, 'plain')
-        part2 = MIMEText(html_content, 'html')
-        msg.attach(part1)
-        msg.attach(part2)
-        
-        # Send the email using SMTP
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()  # Enable TLS encryption
-        server.login(smtp_username, smtp_password)
-        server.send_message(msg)
-        server.quit()
-        
-        print(f"Email sent successfully via SMTP to {recipient_email}")
-        return True
-        
-    except Exception as e:
-        print(f"Error sending email via SMTP: {e}")
-        print("Email would have been sent to:", recipient_email)
-        print("Order receipt content:", format_order_receipt(order_data))
-        return False
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Create plain text version
+    text_content = f"Order Receipt\n\n{receipt_content}\n\nThank you for your business!\nIf you have any questions, please contact our customer support."
+    
+    # Send via MailerSend API
+    return await send_email_via_mailersend(
+        to_email=recipient_email,
+        subject=f"Order Receipt - {order_data['order_number']}",
+        html_content=html_content,
+        text_content=text_content
+    )
 
 def format_order_receipt(order_data: dict) -> str:
     """Format order data into a readable receipt"""
@@ -1560,12 +1586,19 @@ class IngressMessage(BaseModel):
     conversation_id: Optional[str] = None
 
 # Import modular components
-from .auth import authenticate_user, lookup_user_by_email, LoginRequest, LoginResponse
+from .auth import (
+    authenticate_user,
+    ensure_default_users,
+    lookup_user_by_email,
+    LoginRequest,
+    LoginResponse,
+)
 from .api_endpoints import (
     UserProfile, UserAddress, OrderItem, Order, 
     UserProfileResponse, OrdersResponse, HealthResponse,
     get_user_profile, get_user_orders, get_order_details,
-    lookup_orders_by_email, lookup_order_by_number
+    lookup_orders_by_email, lookup_order_by_number,
+    create_order, CreateOrderRequest
 )
 from database import (
     create_conversation,
@@ -1659,7 +1692,7 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",  # ✅ Change back to latest
         enable_auto_commit=True,
-        session_timeout_ms=6000,
+        session_timeout_ms=30000,  # Increased to 30s to handle email operations
         request_timeout_ms=30000
     )
     
@@ -1706,6 +1739,7 @@ async def login(request: LoginRequest):
             first_name=user_data.get('first_name'),
             last_name=user_data.get('last_name'),
             phone=user_data.get('phone'),
+            is_admin=user_data.get('is_admin', False),
             created_at=user_data['created_at'].isoformat(),
             updated_at=user_data['updated_at'].isoformat()
         )
@@ -1769,6 +1803,38 @@ async def get_order_details_endpoint(order_number: str):
     """Get detailed information about a specific order"""
     return await get_order_details(order_number)
 
+# Create Order Endpoint
+@app.post("/api/orders", response_model=Order)
+async def create_order_endpoint(request: CreateOrderRequest):
+    """Create a new order for a user"""
+    return await create_order(request)
+
+# Get Products Endpoint
+@app.get("/api/products")
+async def get_products_endpoint():
+    """Get list of available products"""
+    from database.connection import get_database_connection
+    from psycopg2.extras import RealDictCursor
+    
+    conn = get_database_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT id, name, description, price, stock_quantity
+                FROM products
+                ORDER BY name
+            """)
+            products = cursor.fetchall()
+            return {"products": [dict(product) for product in products]}
+    except Exception as e:
+        print(f"Error fetching products: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        conn.close()
+
 
 async def orchestrator_consumer():
     """
@@ -1782,7 +1848,9 @@ async def orchestrator_consumer():
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id="orchestrator-group-v2",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        auto_offset_reset="earliest"
+        auto_offset_reset="earliest",
+        session_timeout_ms=30000,  # Increased to 30s to handle email operations
+        request_timeout_ms=30000
     )
     
     await consumer.start()
@@ -1795,11 +1863,11 @@ async def orchestrator_consumer():
 
     print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
 
-    print(f"🔍 Orchestrator ENTERING async for loop")
+    verbose_polling_log("🔍 Orchestrator ENTERING async for loop")
     try:
         async for message in consumer:
             print(f"⚡ LOOP ITERATION - got message from partition {message.partition}")  # ADD THIS
-            print(f"🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
+            verbose_polling_log("🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
             event = message.value
             session_id = event.get("session_id", "unknown")
             print(f"→ Orchestrator received event for {session_id}")
@@ -1856,9 +1924,15 @@ async def orchestrator_consumer():
                 )
                 
                 # Determine target topic based on message type and priority
-                topic_key = message_type if message_type in PRIORITY_TOPICS else "Message"
+                # Map "Order Receipt" to Email agent since it needs to send emails
+                if message_type == "Order Receipt":
+                    topic_key = "Email"
+                    print(f"🔄 Routing 'Order Receipt' message to Email agent (topic: {topic_key})")
+                else:
+                    topic_key = message_type if message_type in PRIORITY_TOPICS else "Message"
                 priority_topics = PRIORITY_TOPICS.get(topic_key, PRIORITY_TOPICS["Message"])
                 target_topic = priority_topics[priority - 1]  # priority 1->p1, 2->p2, 3->p3
+                print(f"→ Routed {session_id} to {target_topic} (type: {message_type}, priority: P{priority})")
                 
                 # Create routing event
                 routing_event = {
@@ -2020,7 +2094,7 @@ graph = graph_builder.compile()
                     
         except Exception as e:
             print(f"Error: {e}")
-            print("Please try again or contact support // agenticaistack@gmail.com.")
+            print("Please try again or contact support // agenticstack@commerceconductor.com.")
 
     """
 
