@@ -94,7 +94,7 @@ export function Orders() {
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h2>Your Orders</h2>
-          <Button onClick={refreshOrders} size="sm" variant="outline">
+          <Button onClick={refreshOrders} size="sm" variant="outline" className="shadow-md">
             <RefreshCw className="h-4 w-4 mr-2" />
             Retry
           </Button>
@@ -116,11 +116,11 @@ export function Orders() {
       <div className="flex items-center justify-between">
         <h2>Your Orders</h2>
         <div className="flex gap-2">
-          <Button onClick={refreshOrders} size="sm" variant="outline" disabled={isLoadingOrders}>
+          <Button onClick={refreshOrders} size="sm" variant="outline" disabled={isLoadingOrders} className="shadow-md">
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoadingOrders ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button onClick={handleNewOrder} size="sm">
+          <Button onClick={handleNewOrder} size="sm" className="shadow-md">
             <Plus className="h-4 w-4 mr-2" />
             New Order
           </Button>
@@ -133,6 +133,20 @@ export function Orders() {
         </div>
       )}
 
+<<<<<<< Updated upstream
+=======
+      {orders.length === 0 && !showOrderForm && (
+        <div className="text-center text-muted-foreground py-8">
+          <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p>No orders found</p>
+          <Button onClick={handleNewOrder} className="mt-4 shadow-md">
+            <Plus className="h-4 w-4 mr-2" />
+            Place Your First Order
+          </Button>
+        </div>
+      )}
+
+>>>>>>> Stashed changes
       <div className="space-y-3">
         {orders.map((order) => (
           <Card key={order.id} className="p-3">
@@ -180,6 +194,7 @@ export function Orders() {
         ))}
       </div>
 
+<<<<<<< Updated upstream
       {orders.length === 0 && (
         <div className="text-center text-muted-foreground py-8">
           <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -189,6 +204,150 @@ export function Orders() {
             Place Your First Order
           </Button>
         </div>
+=======
+      {/* Inline Order Form */}
+      {showOrderForm && (
+        <Card className="p-4 mt-4">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Create New Order</h3>
+              <Button
+                onClick={() => {
+                  setShowOrderForm(false);
+                  setOrderItems([]);
+                  setError(null);
+                }}
+                variant="ghost"
+                size="sm"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>Order Items</Label>
+                <Button onClick={addOrderItem} size="sm" variant="outline" className="shadow-md">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Item
+                </Button>
+              </div>
+
+              {orderItems.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground text-sm">
+                  No items added. Click "Add Item" to get started.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {orderItems.map((item, index) => (
+                    <Card key={index} className="p-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">Item {index + 1}</Label>
+                          {orderItems.length > 1 && (
+                            <Button
+                              onClick={() => removeOrderItem(index)}
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <div>
+                            <Label htmlFor={`product-${index}`} className="text-xs">Product</Label>
+                            <select
+                              id={`product-${index}`}
+                              value={item.product_id}
+                              onChange={(e) => updateOrderItem(index, 'product_id', e.target.value)}
+                              className="w-full mt-1 px-3 py-2 border rounded-md text-sm"
+                            >
+                              {products.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.name} - ${product.price.toFixed(2)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <Label htmlFor={`quantity-${index}`} className="text-xs">Quantity</Label>
+                              <Input
+                                id={`quantity-${index}`}
+                                type="number"
+                                min="1"
+                                value={item.quantity}
+                                onChange={(e) => updateOrderItem(index, 'quantity', parseInt(e.target.value) || 1)}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`price-${index}`} className="text-xs">Unit Price</Label>
+                              <Input
+                                id={`price-${index}`}
+                                type="number"
+                                step="0.01"
+                                value={item.unit_price.toFixed(2)}
+                                onChange={(e) => updateOrderItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                                className="mt-1"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="text-sm text-muted-foreground">
+                            Subtotal: ${(item.unit_price * item.quantity).toFixed(2)}
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {orderItems.length > 0 && (
+              <div className="pt-4 border-t">
+                <div className="flex justify-between items-center text-lg font-semibold">
+                  <span>Total:</span>
+                  <span>${calculateTotal().toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-4">
+              <Button
+                onClick={() => {
+                  setShowOrderForm(false);
+                  setOrderItems([]);
+                  setError(null);
+                }}
+                variant="outline"
+                disabled={isSubmitting}
+                className="flex-1 shadow-md"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSubmitOrder}
+                disabled={isSubmitting || orderItems.length === 0}
+                className="flex-1 shadow-md"
+              >
+                {isSubmitting ? 'Creating...' : 'Save Order'}
+              </Button>
+            </div>
+          </div>
+        </Card>
+>>>>>>> Stashed changes
       )}
     </div>
   );

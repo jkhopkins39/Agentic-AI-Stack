@@ -124,7 +124,7 @@ export function Login({ onLogin }: LoginProps) {
               {/* Submit Button */}
               <Button 
                 type="submit" 
-                className="w-full h-10 text-base font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg" 
+                className="w-full h-10 text-base font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg shadow-md" 
                 disabled={isLoading}
               >
                 {isLoading ? (
@@ -144,7 +144,7 @@ export function Login({ onLogin }: LoginProps) {
                 type="button"
                 variant="outline"
                 onClick={handleGuestLogin}
-                className="w-full h-10 text-base border-gray-300"
+                className="w-full h-10 text-base border-gray-300 shadow-md"
               >
                 <User className="mr-2 h-4 w-4" />
                 Continue as Guest
