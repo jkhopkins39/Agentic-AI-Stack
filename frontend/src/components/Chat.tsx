@@ -262,7 +262,7 @@ export function Chat({ conversationId: initialConversationId, sessionId: initial
                 status: 'fulfilled',
                 timestamp: new Date(),
                 isUser: false,
-                agentType: 'orchestrator'
+                agentType: 'Orchestrator'
               };
               return [greetingMessage];
             }
