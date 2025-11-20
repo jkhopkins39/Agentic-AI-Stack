@@ -1755,7 +1755,6 @@ async def websocket_agent_responses(websocket: WebSocket, session_id: str):
         "type": "connection",
         "status": "connected",
         "session_id": session_id,
-        "message": "WebSocket connected, waiting for agent responses..."
     })
     
     # ✅ Add timestamp filter here too
