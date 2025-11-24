@@ -423,10 +423,21 @@ async def lifespan(app: FastAPI):
         
     # Start orchestrator consumer
     try:
-        asyncio.create_task(orchestrator_consumer())
+        orchestrator_task = asyncio.create_task(orchestrator_consumer())
         print("✓ Orchestrator consumer task created")
+        # Add error callback to catch exceptions
+        def log_orchestrator_error(task):
+            try:
+                task.result()  # This will raise if the task failed
+            except Exception as e:
+                import traceback
+                print(f"✗ Orchestrator consumer task failed: {e}")
+                print(f"✗ Traceback: {traceback.format_exc()}")
+        orchestrator_task.add_done_callback(log_orchestrator_error)
     except Exception as e:
+        import traceback
         print(f"✗ Failed to start orchestrator consumer: {e}")
+        print(f"✗ Traceback: {traceback.format_exc()}")
         
     # Start priority consumers
     try:
@@ -1959,7 +1970,9 @@ async def orchestrator_consumer():
         await consumer.start()
         print(f"🔵 Orchestrator consumer started on {INGRESS_TOPIC}")
     except Exception as e:
+        import traceback
         print(f"✗ Orchestrator consumer failed to start: {e}")
+        print(f"✗ Traceback: {traceback.format_exc()}")
         return
 
     # Wait for partition assignment
@@ -1976,13 +1989,20 @@ async def orchestrator_consumer():
     print(f"✅ Orchestrator assigned partitions: {consumer.assignment()}")
 
     verbose_polling_log("🔍 Orchestrator ENTERING async for loop")
+    print("🔍 Orchestrator is now listening for messages...")
     try:
         async for message in consumer:
-            print(f"⚡ LOOP ITERATION - got message from partition {message.partition}")  # ADD THIS
+            print(f"⚡ LOOP ITERATION - got message from partition {message.partition}, offset {message.offset}")  # ADD THIS
             verbose_polling_log("🔍 ORCHESTRATOR GOT MESSAGE!")  # Add this first line
-            event = message.value
+            try:
+                event = message.value
+            except Exception as e:
+                print(f"✗ Error deserializing message: {e}")
+                import traceback
+                print(f"✗ Traceback: {traceback.format_exc()}")
+                continue
             session_id = event.get("session_id", "unknown")
-            print(f"→ Orchestrator received event for {session_id}")
+            print(f"→ Orchestrator received event for {session_id}, query: {event.get('query_text', '')[:50]}...")
             
             try:
                 # Get user information from event
@@ -2023,10 +2043,19 @@ async def orchestrator_consumer():
                 }
                 
                 # Classify message type (your existing classify_message function)
-                classification = classify_message(state)
-                state.update(classification)
-                
-                message_type = state.get("message_type", "Message")
+                try:
+                    print(f"🔍 Classifying message for {session_id}...")
+                    classification = classify_message(state)
+                    state.update(classification)
+                    message_type = state.get("message_type", "Message")
+                    print(f"✅ Classified as: {message_type}")
+                except Exception as e:
+                    import traceback
+                    print(f"✗ Classification error for {session_id}: {e}")
+                    print(f"✗ Traceback: {traceback.format_exc()}")
+                    # Default to Message type if classification fails
+                    message_type = "Message"
+                    state["message_type"] = message_type
                 
                 # Classify priority
                 priority = classify_priority(
@@ -2059,16 +2088,26 @@ async def orchestrator_consumer():
                 }
                 
                 # Publish to priority topic
-                await producer.send_and_wait(
-                    target_topic,
-                    value=routing_event,
-                    key=session_id
-                )
-                
-                print(f"→ Routed {session_id} to {target_topic} (type: {message_type}, priority: P{priority})")
+                if not producer:
+                    print(f"✗ Producer not initialized! Cannot route {session_id}")
+                    continue
+                try:
+                    await producer.send_and_wait(
+                        target_topic,
+                        value=routing_event,
+                        key=session_id
+                    )
+                    print(f"✅ Successfully routed {session_id} to {target_topic} (type: {message_type}, priority: P{priority})")
+                except Exception as e:
+                    import traceback
+                    print(f"✗ Failed to publish to {target_topic} for {session_id}: {e}")
+                    print(f"✗ Traceback: {traceback.format_exc()}")
+                    raise
                 
             except Exception as e:
+                import traceback
                 print(f"✗ Orchestrator error for {session_id}: {e}")
+                print(f"✗ Traceback: {traceback.format_exc()}")
                 
     finally:
         await consumer.stop()
