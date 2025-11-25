@@ -14,26 +14,26 @@ def lookup_order_by_number(order_number: str):
             
             # Use cursor to execute query
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            query = """
-            SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
-                   u.email, u.first_name, u.last_name,
-                   array_agg(
-                       json_build_object(
-                           'product_name', p.name,
-                           'quantity', oi.quantity,
-                           'unit_price', oi.unit_price,
-                           'total_price', oi.quantity * oi.unit_price
-                       )
-                   ) as items
-            FROM orders o
-            JOIN users u ON o.user_id = u.id
-            JOIN order_items oi ON o.id = oi.order_id
-            JOIN products p ON oi.product_id = p.id
-            WHERE UPPER(o.order_number) = UPPER(%s)
-            GROUP BY o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
-                     u.email, u.first_name, u.last_name
-            """
-            cursor.execute(query, (order_number,))
+                query = """
+                SELECT o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
+                       u.email, u.first_name, u.last_name,
+                       array_agg(
+                           json_build_object(
+                               'product_name', p.name,
+                               'quantity', oi.quantity,
+                               'unit_price', oi.unit_price,
+                               'total_price', oi.quantity * oi.unit_price
+                           )
+                       ) as items
+                FROM orders o
+                JOIN users u ON o.user_id = u.id
+                JOIN order_items oi ON o.id = oi.order_id
+                JOIN products p ON oi.product_id = p.id
+                WHERE UPPER(o.order_number) = UPPER(%s)
+                GROUP BY o.id, o.order_number, o.status, o.total_amount, o.currency, o.created_at,
+                         u.email, u.first_name, u.last_name
+                """
+                cursor.execute(query, (order_number,))
                 order = cursor.fetchone()
                 return dict(order) if order else None
     except Exception as e:
