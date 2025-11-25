@@ -20,6 +20,24 @@ Answer the question based on the above context: {question}
 """
 
 
+async def query_rag_async(query_text):
+    """
+    Async version of query_rag for parallel execution.
+    Query a Retrieval-Augmented Generation (RAG) system using Chroma database and OpenAI.
+    
+    Args:
+        query_text (str): The text to query the RAG system with.
+    
+    Returns:
+        tuple: (formatted_response, response_text)
+    """
+    import asyncio
+    
+    # Run the synchronous query in a thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, query_rag, query_text)
+
+
 def query_rag(query_text):
     """
     Query a Retrieval-Augmented Generation (RAG) system using Chroma database and OpenAI.

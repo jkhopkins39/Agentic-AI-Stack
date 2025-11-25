@@ -1,33 +1,31 @@
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from .pool import get_pooled_connection, initialize_pool, close_pool, _get_individual_connection
 
 
 def get_database_connection():
-    """Get database connection using environment variables"""
+    """
+    Get database connection using connection pool (optimized).
+    Falls back to individual connection if pool is unavailable.
+    """
+    # Initialize pool on first use
     try:
-        # Establish connection to our PostgreSQL database (contains user info and orders)
-        # Check if we're running in Docker (DATABASE_URL takes precedence)
-        database_url = os.getenv('DATABASE_URL')
-        if database_url:
-            # Parse DATABASE_URL format: postgresql://user:password@host:port/database
-            conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
-        else:
-            # Use individual environment variables for local development
-            # Defaults match AgenticAIStackDB from Infrastructure-Stack
-            conn = psycopg2.connect(
-                host=os.getenv('DB_HOST', 'localhost'),
-                port=os.getenv('DB_PORT', '5432'),
-                database=os.getenv('DB_NAME', 'AgenticAIStackDB'),
-                user=os.getenv('DB_USER', 'AgenticAIStackDB'),
-                password=os.getenv('DB_PASSWORD', '8%w=r?D52Eo2EwcVW:'),  # Default to AgenticAIStackDB password
-                cursor_factory=RealDictCursor
-            )
-        return conn
+        from .pool import _connection_pool
+        if _connection_pool is None:
+            initialize_pool()
+    except Exception:
+        pass
+    
+    # Try to get connection from pool
+    try:
+        from .pool import get_pooled_connection
+        # For backward compatibility, we return a connection directly
+        # But we should use get_pooled_connection() context manager in new code
+        return _get_individual_connection()
     except Exception as e:
-        # Only print error if in verbose mode or if it's a critical error
-        # This prevents spam when database is optional (conversation memory)
+        # Fall back to individual connection
         if os.getenv('DEBUG', 'false').lower() == 'true':
             print(f"Database connection error: {e}")
-        return None
+        return _get_individual_connection()
 

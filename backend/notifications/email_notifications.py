@@ -1,5 +1,5 @@
 import os
-from notifications.mailersend import send_email_via_mailersend
+# MailerSend removed - email functionality disabled
 
 """Change default system email"""
 DEFAULT_SYSTEM_EMAIL = "agenticstack@commerceconductor.com"
@@ -111,13 +111,9 @@ This is an automated message from your Agentic AI Stack system.
 Please do not reply to this email.
     """
     
-    # Send via MailerSend API
-    return await send_email_via_mailersend(
-        to_email=recipient_email,
-        subject="Account Information Changed - Agentic AI Stack",
-        html_content=html_content,
-        text_content=text_content
-    )
+    # Email functionality disabled (MailerSend removed)
+    print(f"⚠️ Email sending disabled: Would have sent information change email to {recipient_email}")
+    return False
 
 
 async def send_order_receipt_email(order_data: dict, recipient_email: str = None):
@@ -153,11 +149,7 @@ async def send_order_receipt_email(order_data: dict, recipient_email: str = None
     # Create plain text version
     text_content = f"Order Receipt\n\n{receipt_content}\n\nThank you for your business!\nIf you have any questions, please contact our customer support."
     
-    # Send via MailerSend API
-    return await send_email_via_mailersend(
-        to_email=recipient_email,
-        subject=f"Order Receipt - {order_data['order_number']}",
-        html_content=html_content,
-        text_content=text_content
-    )
+    # Email functionality disabled (MailerSend removed)
+    print(f"⚠️ Email sending disabled: Would have sent order receipt to {recipient_email}")
+    return False
 

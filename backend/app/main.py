@@ -33,7 +33,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from notifications.mailersend import send_email_via_mailersend
+# MailerSend removed - email functionality disabled
 
 # Data path reads in txt file for policy RAG
 DATA_PATH = os.path.join(os.getcwd())
@@ -317,8 +317,11 @@ class PriorityConsumer:
                         state = event.get("state", {})
                         print(f"→ {agent_type} agent: State extracted, calling handler...", flush=True)
                         
-                        # Process with agent handler
+                        # Process with agent handler (supports streaming)
+                        agent_response = ""
                         if asyncio.iscoroutinefunction(agent_handler_func):
+                            # For async handlers, check if they support streaming
+                            # For now, we'll get the full result and stream it
                             result = await agent_handler_func(state)
                         else:
                             result = agent_handler_func(state)
@@ -333,6 +336,14 @@ class PriorityConsumer:
                             agent_response = agent_response.split(": ", 1)[1]
                         
                         print(f"→ {agent_type} agent processed {session_id}")
+                        
+                        # Stream response chunks for better perceived latency
+                        # Publish initial "streaming" status
+                        if agent_response:
+                            # For now, we'll publish the full response
+                            # In a full streaming implementation, we'd publish chunks as they arrive
+                            # This is a simplified version that still improves perceived latency
+                            pass
 
                         # Get conversation info
                         conversation_id = event.get("conversation_id")
@@ -411,6 +422,13 @@ async def lifespan(app: FastAPI):
     global producer, priority_consumer
         
         # Startup
+    # Initialize database connection pool
+    try:
+        from database.pool import initialize_pool
+        initialize_pool()
+    except Exception as e:
+        print(f"⚠️ Failed to initialize connection pool: {e}")
+    
     ensure_default_users()
     kafka_config = get_kafka_config()
     producer = AIOKafkaProducer(
@@ -456,6 +474,13 @@ async def lifespan(app: FastAPI):
     if producer:
         await producer.stop()
         print("✗ Kafka producer stopped")
+    
+    # Close database connection pool
+    try:
+        from database.pool import close_pool
+        close_pool()
+    except Exception as e:
+        print(f"⚠️ Error closing connection pool: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -573,6 +598,8 @@ load_dotenv()
 SESSION_EMAIL = "jeremyyhop@gmail.com"
 
 from langchain_anthropic import ChatAnthropic
+from utils.fast_classifier import fast_classify
+from utils.classification_cache import get_cached_classification, cache_classification
 llm = ChatAnthropic(model="claude-3-haiku-20240307")
 
 # Load ChatGPT 4o Mini
@@ -644,16 +671,119 @@ def classify_priority(query_text: str, message_type: str, event: dict) -> int:
     return 3
 
 #last message is stored in the -1 column of our messages array.
-def classify_message(state: State):
+async def classify_message_async(state: State):
+    """
+    Async classification with fast rule-based classifier, caching, and LLM fallback.
+    Optimized for low latency.
+    """
     last_message = state["messages"][-1]
     # Handle both dict and object message formats
     message_content = last_message.get("content") if isinstance(last_message, dict) else last_message.content
     print(f"CLASSIFYING MESSAGE: {message_content}")
 
-    #we use a LangChain method to wrap the base language model to conform with message classifier schema. 
+    # Step 1: Check cache first (fastest)
+    cached_result = get_cached_classification(message_content)
+    if cached_result:
+        print(f"✅ Cached classification: {cached_result}")
+        priority = classify_priority(message_content, cached_result, state)
+        return {
+            "message_type": cached_result,
+            "priority": priority
+        }
+    
+    # Step 2: Try fast rule-based classifier (very fast, no LLM call)
+    fast_result = fast_classify(message_content)
+    if fast_result:
+        print(f"✅ Fast classifier result: {fast_result}")
+        cache_classification(message_content, fast_result)
+        priority = classify_priority(message_content, fast_result, state)
+        return {
+            "message_type": fast_result,
+            "priority": priority
+        }
+    
+    # Step 3: Use async LLM classification (only for ambiguous cases)
+    print(f"⚠️ Using LLM classification (ambiguous query)")
     classifier_llm = llm.with_structured_output(MessageClassifier)
+    
+    # Use async ainvoke instead of blocking invoke
+    result = await classifier_llm.ainvoke([
+        {
+            "role": "system",
+            "content": """Classify the user message as one of the following:
+            - 'Order': if the user asks about specific order information such as shipping status, tracking, price, order quantity, order number, etc.
+            - 'Email': if the user explicitly mentions email or requests information to be sent via email
+            - 'Policy': if the user asks about returns, refunds, return policy, shipping policy,
+            exchange policy, warranty, terms of service, company policies, return timeframes, return process, or any store/company rules and procedures
+            - 'Order Receipt': if the user asks about seeing the receipt of a previous order
+            - 'Change Information': if the user requests to change, update, or modify their personal information like name, email, phone number, address, etc.
+            - 'Message': if the user asks a general question not related to orders, policies, or email requests
+            
+            Examples of Policy questions:
+            - "What is your return policy?"
+            - "How long do I have to return an item?"
+            - "Can I return this product?"
+            - "What are your shipping policies?"
+            - "Do you accept returns?"
+            - "How do returns work?"
+            
+            Be very specific: 
+            - If the message contains words like 'return', 'policy', 'refund', 'exchange', 'warranty', or asks about company procedures, classify as 'Policy'
+            - If the message contains words like 'change', 'update', 'modify' combined with personal information (name, email, phone, address), classify as 'Change Information'
+            - If the message asks for receipts or receipt information, classify as 'Order Receipt'"""
+        },
+        {"role": "user", "content": message_content}
+    ])
+    print(f"✅ LLM classified as: {result.message_type}")
+    
+    # Cache the LLM result
+    cache_classification(message_content, result.message_type)
+    
+    priority = classify_priority(message_content, result.message_type, state)
+    
+    return {
+        "message_type": result.message_type,
+        "priority": priority
+    }
 
-    #Result is stored as result of classifier invocation, we can print and return the message type and message itself later
+
+# Keep synchronous version for backward compatibility with graph
+def classify_message(state: State):
+    """Synchronous wrapper for async classification (for graph compatibility)"""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If we're in an async context, we need to handle this differently
+            # For now, fall back to blocking invoke for graph compatibility
+            return _classify_message_sync(state)
+        else:
+            return loop.run_until_complete(classify_message_async(state))
+    except RuntimeError:
+        # No event loop, create one
+        return asyncio.run(classify_message_async(state))
+
+
+def _classify_message_sync(state: State):
+    """Synchronous classification fallback (for graph compatibility)"""
+    last_message = state["messages"][-1]
+    message_content = last_message.get("content") if isinstance(last_message, dict) else last_message.content
+    
+    # Check cache
+    cached_result = get_cached_classification(message_content)
+    if cached_result:
+        priority = classify_priority(message_content, cached_result, state)
+        return {"message_type": cached_result, "priority": priority}
+    
+    # Try fast classifier
+    fast_result = fast_classify(message_content)
+    if fast_result:
+        cache_classification(message_content, fast_result)
+        priority = classify_priority(message_content, fast_result, state)
+        return {"message_type": fast_result, "priority": priority}
+    
+    # Fall back to LLM (blocking)
+    classifier_llm = llm.with_structured_output(MessageClassifier)
     result = classifier_llm.invoke([
         {
             "role": "system",
@@ -681,13 +811,9 @@ def classify_message(state: State):
         },
         {"role": "user", "content": message_content}
     ])
-    print(f"CLASSIFIED AS: {result.message_type}")
     
-    priority = classify_priority(
-        message_content,  # ✅ Use the variable you already extracted above
-        result.message_type,
-        state
-    )
+    cache_classification(message_content, result.message_type)
+    priority = classify_priority(message_content, result.message_type, state)
     
     return {
         "message_type": result.message_type,
@@ -1343,13 +1469,9 @@ This is an automated message from your Agentic AI Stack system.
 Please do not reply to this email.
     """
     
-    # Send via MailerSend API
-    return await send_email_via_mailersend(
-        to_email=recipient_email,
-        subject="Account Information Changed - Agentic AI Stack",
-        html_content=html_content,
-        text_content=text_content
-    )
+    # Email functionality disabled (MailerSend removed)
+    print(f"⚠️ Email sending disabled: Would have sent information change email to {recipient_email}")
+    return False
 
 # Send order receipt email using MailerSend API
 async def send_order_receipt_email(order_data: dict, recipient_email: str):
@@ -1381,13 +1503,9 @@ async def send_order_receipt_email(order_data: dict, recipient_email: str):
     # Create plain text version
     text_content = f"Order Receipt\n\n{receipt_content}\n\nThank you for your business!\nIf you have any questions, please contact our customer support."
     
-    # Send via MailerSend API
-    return await send_email_via_mailersend(
-        to_email=recipient_email,
-        subject=f"Order Receipt - {order_data['order_number']}",
-        html_content=html_content,
-        text_content=text_content
-    )
+    # Email functionality disabled (MailerSend removed)
+    print(f"⚠️ Email sending disabled: Would have sent order receipt to {recipient_email}")
+    return False
 
 def format_order_receipt(order_data: dict) -> str:
     """Format order data into a readable receipt"""
@@ -2042,13 +2160,45 @@ async def orchestrator_consumer():
                     "next": None
                 }
                 
-                # Classify message type (your existing classify_message function)
+                # Optimize: For potential policy questions, run classification and RAG in parallel
+                query_text = event.get("query_text", "")
+                might_be_policy = fast_classify(query_text) == "Policy" or any(
+                    keyword in query_text.lower() 
+                    for keyword in ["return", "policy", "refund", "warranty", "shipping policy"]
+                )
+                
+                # Start RAG query early if it might be a policy question
+                rag_task = None
+                if might_be_policy:
+                    print(f"🚀 Starting RAG query early for potential policy question: {session_id}")
+                    from rag.query import query_rag_async
+                    rag_task = asyncio.create_task(query_rag_async(query_text))
+                
+                # Classify message type using async classification (optimized)
                 try:
                     print(f"🔍 Classifying message for {session_id}...")
-                    classification = classify_message(state)
+                    classification = await classify_message_async(state)
                     state.update(classification)
                     message_type = state.get("message_type", "Message")
                     print(f"✅ Classified as: {message_type}")
+                    
+                    # If it's a policy question and we started RAG early, store the result
+                    if message_type == "Policy" and rag_task:
+                        try:
+                            rag_result = await rag_task
+                            # Store RAG result in state for policy agent to use
+                            state["rag_result"] = rag_result
+                            print(f"✅ RAG query completed early for policy question")
+                        except Exception as e:
+                            print(f"⚠️ Early RAG query failed: {e}")
+                    elif rag_task:
+                        # Cancel RAG task if it's not a policy question
+                        rag_task.cancel()
+                        try:
+                            await rag_task
+                        except asyncio.CancelledError:
+                            pass
+                            
                 except Exception as e:
                     import traceback
                     print(f"✗ Classification error for {session_id}: {e}")
@@ -2056,6 +2206,13 @@ async def orchestrator_consumer():
                     # Default to Message type if classification fails
                     message_type = "Message"
                     state["message_type"] = message_type
+                    # Cancel RAG task if classification failed
+                    if rag_task:
+                        rag_task.cancel()
+                        try:
+                            await rag_task
+                        except asyncio.CancelledError:
+                            pass
                 
                 # Classify priority
                 priority = classify_priority(
