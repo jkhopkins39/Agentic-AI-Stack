@@ -1,3 +1,4 @@
+from psycopg2.extras import RealDictCursor
 from .connection import get_database_connection
 from .pool import get_pooled_connection
 
@@ -9,7 +10,7 @@ def lookup_user_by_email(email: str):
                 return None
             
             # Create a cursor which is a control structure that enables traversal over records in database
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Define a query to retrieve user information by email
                 query = """
                 SELECT id, email, first_name, last_name, phone, is_admin, created_at, updated_at
@@ -34,7 +35,7 @@ def update_user_information(user_id: str, updates: dict):
             if not conn:
                 return False
             
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Build dynamic update query
                 update_fields = []
                 values = []

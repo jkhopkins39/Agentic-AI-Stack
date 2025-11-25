@@ -1,6 +1,7 @@
 import uuid
 import json
 from typing import Optional, Dict, Any, List
+from psycopg2.extras import RealDictCursor
 from .connection import get_database_connection
 from .pool import get_pooled_connection
 
@@ -13,7 +14,7 @@ def create_conversation(session_id: str, user_id: Optional[str] = None, user_ema
             if not conn:
                 return None
             
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 conversation_id = str(uuid.uuid4())
                 query = """
                 INSERT INTO conversations (id, session_id, user_id, user_email, conversation_type, context)
@@ -34,7 +35,7 @@ def get_conversation(session_id: str) -> Optional[Dict[str, Any]]:
             if not conn:
                 return None
             
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 query = """
                 SELECT id, session_id, user_id, user_email, status, conversation_type, context, created_at, updated_at
                 FROM conversations 
@@ -58,7 +59,7 @@ def update_conversation_context(conversation_id: str, context: Dict[str, Any],
             if not conn:
                 return False
             
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Build dynamic update query
                 update_fields = ["context = %s", "updated_at = CURRENT_TIMESTAMP"]
                 values = [json.dumps(context)]
@@ -95,7 +96,7 @@ def save_query_to_conversation(conversation_id: str, user_message: str, agent_ty
             if not conn:
                 return None
             
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 query_id = str(uuid.uuid4())
                 query = """
                 INSERT INTO queries (id, conversation_id, user_id, query_text, agent_type, agent_response, 
@@ -118,7 +119,7 @@ def get_conversation_history(conversation_id: str) -> List[Dict[str, Any]]:
             if not conn:
                 return []
             
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 query = """
                 SELECT query_text, agent_type, agent_response, message_order, created_at
                 FROM queries 

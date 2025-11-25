@@ -81,7 +81,7 @@ def get_pooled_connection(cursor_factory=RealDictCursor):
     Get a connection from the pool with automatic cleanup.
     Usage:
         with get_pooled_connection() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT ...")
     """
     global _connection_pool
@@ -105,10 +105,8 @@ def get_pooled_connection(cursor_factory=RealDictCursor):
     try:
         conn = _connection_pool.getconn()
         if conn:
-            # Set cursor factory if needed
-            if cursor_factory and not isinstance(conn.cursor().cursor_factory, type(cursor_factory)):
-                # Note: cursor_factory is set per cursor, not per connection
-                pass
+            # Note: cursor_factory is set per cursor when calling conn.cursor(cursor_factory=...)
+            # The connection itself doesn't store cursor_factory, so we just yield it
             yield conn
     except pool.PoolError as e:
         print(f"!!! Pool error: {e}")
