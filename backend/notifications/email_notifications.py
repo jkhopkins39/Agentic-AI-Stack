@@ -1,8 +1,12 @@
 import os
-# MailerSend removed - email functionality disabled
+import resend
+
+# Initialize Resend with API key
+resend.api_key = os.environ.get("RESEND_API_KEY", "")
 
 """Change default system email"""
 DEFAULT_SYSTEM_EMAIL = "agenticstack@commerceconductor.com"
+FROM_EMAIL = "Commerce Conductor <agenticstack@commerceconductor.com>"
 
 
 def format_order_receipt(order_data: dict) -> str:
@@ -45,13 +49,18 @@ TOTAL: ${order_data['total_amount']:.2f} {order_data['currency']}
 
 
 async def send_information_change_email(changes_made: list, recipient_email: str = None):
-    """Send information change notification email using MailerSend API"""
+    """Send information change notification email using Resend API"""
     # Use default system email if recipient not provided
     if not recipient_email:
         recipient_email = DEFAULT_SYSTEM_EMAIL
     
     if not recipient_email:
         print("⚠️ No recipient email provided for information change notification")
+        return False
+    
+    # Check if API key is configured
+    if not resend.api_key:
+        print("⚠️ RESEND_API_KEY not configured - email sending disabled")
         return False
     
     # Format the changes
@@ -74,7 +83,7 @@ async def send_information_change_email(changes_made: list, recipient_email: str
             
             <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
                 <p style="margin: 0; color: #856404;">
-                    <strong>Security Notice:</strong> If you did not make this change, contact us at agenticaistack@gmail.com.
+                    <strong>Security Notice:</strong> If you did not make this change, contact us at agenticstack@commerceconductor.com.
                 </p>
             </div>
             
@@ -82,12 +91,12 @@ async def send_information_change_email(changes_made: list, recipient_email: str
                 <p><strong>Need Help?</strong></p>
                 <p>If this change was not made by you, please contact our support team immediately:</p>
                 <p style="background-color: #e3f2fd; padding: 10px; border-radius: 3px;">
-                    <a href="mailto:agenticaistack@gmail.com" style="color: #1976d2;">agenticaistack@gmail.com</a>
+                    <a href="mailto:agenticstack@commerceconductor.com" style="color: #1976d2;">agenticstack@commerceconductor.com</a>
                 </p>
             </div>
             
             <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
-                <p>This is an automated message from your Agentic AI Stack system.</p>
+                <p>This is an automated message from Commerce Conductor.</p>
                 <p>Please do not reply to this email.</p>
             </div>
         </div>
@@ -95,29 +104,25 @@ async def send_information_change_email(changes_made: list, recipient_email: str
     </html>
     """
     
-    # Create plain text version
-    text_content = f"""
-Account Information Updated
-
-Your {changes_text} has been successfully updated.
-
-SECURITY NOTICE: If you did not make this change, please contact us immediately.
-
-Need Help?
-If this change was not made by you, please contact our support team:
-Email: agenticaistack@gmail.com
-
-This is an automated message from your Agentic AI Stack system.
-Please do not reply to this email.
-    """
-    
-    # Email functionality disabled (MailerSend removed)
-    print(f"⚠️ Email sending disabled: Would have sent information change email to {recipient_email}")
-    return False
+    try:
+        params: resend.Emails.SendParams = {
+            "from": FROM_EMAIL,
+            "to": [recipient_email],
+            "subject": "Account Information Updated - Commerce Conductor",
+            "html": html_content,
+        }
+        
+        email = resend.Emails.send(params)
+        print(f"✅ Information change email sent to {recipient_email}: {email}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to send information change email: {e}")
+        return False
 
 
 async def send_order_receipt_email(order_data: dict, recipient_email: str = None):
-    """Send order receipt email using MailerSend API"""
+    """Send order receipt email using Resend API"""
     # Use default system email if recipient not provided
     if not recipient_email:
         recipient_email = DEFAULT_SYSTEM_EMAIL
@@ -125,6 +130,11 @@ async def send_order_receipt_email(order_data: dict, recipient_email: str = None
     if not recipient_email:
         print("⚠️ No recipient email provided for order receipt")
         print("Order receipt content:", format_order_receipt(order_data))
+        return False
+    
+    # Check if API key is configured
+    if not resend.api_key:
+        print("⚠️ RESEND_API_KEY not configured - email sending disabled")
         return False
     
     # Format the order receipt
@@ -136,20 +146,68 @@ async def send_order_receipt_email(order_data: dict, recipient_email: str = None
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
-                Order Receipt
+                🛒 Order Receipt - Commerce Conductor
             </h2>
             <pre style="font-family: 'Courier New', monospace; background-color: #f8f9fa; padding: 20px; border-radius: 5px; white-space: pre-wrap; font-size: 14px;">{receipt_content}</pre>
-            <br><br>
-            <p>If you have any questions, please contact our customer support.</p>
+            
+            <div style="margin-top: 30px; padding: 20px; background-color: #e8f5e9; border-radius: 5px;">
+                <p style="margin: 0; color: #2e7d32;">
+                    <strong>Thank you for your order!</strong>
+                </p>
+                <p style="margin: 10px 0 0 0; color: #555;">
+                    If you have any questions about your order, please contact our customer support.
+                </p>
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
+                <p>This is an automated message from Commerce Conductor.</p>
+                <p>Contact us: <a href="mailto:agenticstack@commerceconductor.com">agenticstack@commerceconductor.com</a></p>
+            </div>
         </div>
     </body>
     </html>
     """
     
-    # Create plain text version
-    text_content = f"Order Receipt\n\n{receipt_content}\n\nThank you for your business!\nIf you have any questions, please contact our customer support."
-    
-    # Email functionality disabled (MailerSend removed)
-    print(f"⚠️ Email sending disabled: Would have sent order receipt to {recipient_email}")
-    return False
+    try:
+        params: resend.Emails.SendParams = {
+            "from": FROM_EMAIL,
+            "to": [recipient_email],
+            "subject": f"Order Receipt #{order_data.get('order_number', 'N/A')} - Commerce Conductor",
+            "html": html_content,
+        }
+        
+        email = resend.Emails.send(params)
+        print(f"✅ Order receipt email sent to {recipient_email}: {email}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to send order receipt email: {e}")
+        return False
 
+
+async def send_generic_email(recipient_email: str, subject: str, html_content: str):
+    """Send a generic email using Resend API"""
+    if not recipient_email:
+        print("⚠️ No recipient email provided")
+        return False
+    
+    # Check if API key is configured
+    if not resend.api_key:
+        print("⚠️ RESEND_API_KEY not configured - email sending disabled")
+        return False
+    
+    try:
+        params: resend.Emails.SendParams = {
+            "from": FROM_EMAIL,
+            "to": [recipient_email],
+            "subject": subject,
+            "html": html_content,
+        }
+        
+        email = resend.Emails.send(params)
+        print(f"✅ Email sent to {recipient_email}: {email}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
+        return False
