@@ -1,8 +1,14 @@
 import os
-import resend
 
-# Initialize Resend with API key
-resend.api_key = os.environ.get("RESEND_API_KEY", "")
+# Try to import resend, but don't fail if not installed
+try:
+    import resend
+    resend.api_key = os.environ.get("RESEND_API_KEY", "")
+    RESEND_AVAILABLE = True
+except ImportError:
+    print("⚠️ Resend package not installed - email sending disabled")
+    resend = None
+    RESEND_AVAILABLE = False
 
 """Change default system email"""
 DEFAULT_SYSTEM_EMAIL = "agenticstack@commerceconductor.com"
@@ -58,9 +64,9 @@ async def send_information_change_email(changes_made: list, recipient_email: str
         print("⚠️ No recipient email provided for information change notification")
         return False
     
-    # Check if API key is configured
-    if not resend.api_key:
-        print("⚠️ RESEND_API_KEY not configured - email sending disabled")
+    # Check if Resend is available and API key is configured
+    if not RESEND_AVAILABLE or not resend or not resend.api_key:
+        print("⚠️ Resend not available or RESEND_API_KEY not configured - email sending disabled")
         return False
     
     # Format the changes
@@ -132,9 +138,9 @@ async def send_order_receipt_email(order_data: dict, recipient_email: str = None
         print("Order receipt content:", format_order_receipt(order_data))
         return False
     
-    # Check if API key is configured
-    if not resend.api_key:
-        print("⚠️ RESEND_API_KEY not configured - email sending disabled")
+    # Check if Resend is available and API key is configured
+    if not RESEND_AVAILABLE or not resend or not resend.api_key:
+        print("⚠️ Resend not available or RESEND_API_KEY not configured - email sending disabled")
         return False
     
     # Format the order receipt
@@ -191,9 +197,9 @@ async def send_generic_email(recipient_email: str, subject: str, html_content: s
         print("⚠️ No recipient email provided")
         return False
     
-    # Check if API key is configured
-    if not resend.api_key:
-        print("⚠️ RESEND_API_KEY not configured - email sending disabled")
+    # Check if Resend is available and API key is configured
+    if not RESEND_AVAILABLE or not resend or not resend.api_key:
+        print("⚠️ Resend not available or RESEND_API_KEY not configured - email sending disabled")
         return False
     
     try:

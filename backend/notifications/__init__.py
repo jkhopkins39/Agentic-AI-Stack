@@ -1,4 +1,13 @@
-from .email_notifications import send_information_change_email, send_order_receipt_email, format_order_receipt
+# Try to import email notifications, but don't fail if resend is not installed
+try:
+    from .email_notifications import send_information_change_email, send_order_receipt_email, format_order_receipt
+    EMAIL_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Email notifications not available: {e}")
+    EMAIL_AVAILABLE = False
+    send_information_change_email = None
+    send_order_receipt_email = None
+    format_order_receipt = None
 
 # Try to import SMS notifications, but don't fail if twilio is not installed
 try:
@@ -31,6 +40,7 @@ __all__ = [
     'get_user_notification_preference',
     'set_user_notification_preference',
     'send_notification',
-    'SMS_AVAILABLE'
+    'SMS_AVAILABLE',
+    'EMAIL_AVAILABLE'
 ]
 

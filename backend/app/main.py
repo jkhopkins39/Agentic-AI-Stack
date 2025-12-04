@@ -33,7 +33,25 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-# MailerSend removed - email functionality disabled
+# Email functionality using Resend
+try:
+    from notifications.email_notifications import (
+        send_information_change_email,
+        send_order_receipt_email,
+        format_order_receipt
+    )
+    EMAIL_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Email notifications not available: {e}")
+    EMAIL_AVAILABLE = False
+    async def send_information_change_email(*args, **kwargs):
+        print("⚠️ Email functionality not available")
+        return False
+    async def send_order_receipt_email(*args, **kwargs):
+        print("⚠️ Email functionality not available")
+        return False
+    def format_order_receipt(order_data):
+        return str(order_data)
 
 # Data path reads in txt file for policy RAG
 DATA_PATH = os.path.join(os.getcwd())
@@ -1404,13 +1422,6 @@ def lookup_orders_by_product_name(product_name: str, user_email: Optional[str] =
         return []
     finally:
         conn.close()
-
-# Import email functions from notifications module (using Resend)
-from notifications.email_notifications import (
-    send_information_change_email,
-    send_order_receipt_email,
-    format_order_receipt
-)
 
 # Handle change information requests with multi-turn conversation support
 def handle_change_information(state: State):
