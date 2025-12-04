@@ -71,14 +71,21 @@ def fast_classify(query_text: str) -> Optional[MessageType]:
         r'\bupdate\s+(name|email|phone|address)',
     ]
     
-    # Order Receipt keywords
+    # Order Receipt keywords (check these FIRST - before email keywords)
     receipt_keywords = [
+        r'\breceipt\s+for\s+(my\s+)?(last\s+)?order',
+        r'\breceipt\s+for\s+last\s+order',
         r'\breceipt\s+for\s+order',
         r'\border\s+receipt',
-        r'\bget\s+receipt',
-        r'\bshow\s+receipt',
-        r'\bdownload\s+receipt',
+        r'\bget\s+(my\s+)?receipt',
+        r'\bshow\s+(my\s+)?receipt',
+        r'\bdownload\s+(my\s+)?receipt',
         r'\bmy\s+receipt',
+        r'\bemail\s+(me\s+)?(my\s+)?(a\s+)?receipt',
+        r'\bsend\s+(me\s+)?(my\s+)?(a\s+)?receipt',
+        r'\breceipt\s+for\s+(my\s+)?last',
+        r'\blast\s+order.*receipt',
+        r'\breceipt.*last\s+order',
     ]
     
     # Check policy keywords (high confidence)
